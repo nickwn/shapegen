@@ -30,6 +30,8 @@ __all__ = [
     "wigner_d", "swsh", "empty_coeffs", "synth", "analy",
     "edth", "edthbar", "edth_factor", "edthbar_factor",
     "spin_laplacian", "laplacian_eig", "hopf_scaling", "q_from_sigma",
+    "mode_list", "eval_basis", "fit_coeffs",
+    "euler_zyz", "wigner_D", "rotate_coeffs",
 ]
 
 
@@ -176,3 +178,102 @@ def hopf_scaling(L: int) -> np.ndarray:
 def q_from_sigma(sigma_hat: np.ndarray) -> np.ndarray:
     """Hopf differential ``q = ð²σ`` (spin-0 σ̂ -> spin-2 q̂)."""
     return edth(edth(sigma_hat, 0), 1)
+
+
+# ---------------------------------------------------------------------------
+# Scattered-point evaluation and least-squares fit (off the GL grid)
+# ---------------------------------------------------------------------------
+
+def mode_list(s: int, L: int):
+    """Ordered ``[(ℓ, m), ...]`` for ℓ ∈ [|s|, L], m ∈ [−ℓ, ℓ]."""
+    return [(l, m) for l in range(abs(s), L + 1) for m in range(-l, l + 1)]
+
+
+def eval_basis(s: int, L: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    """Spin-``s`` SWSH basis sampled at arbitrary ``(θ, φ)``.
+
+    Returns a complex design matrix of shape ``(npts, nmodes)`` whose columns
+    follow ``mode_list(s, L)``:
+    ``₍s₎Y_{ℓm}(θ,φ) = √((2ℓ+1)/4π) d^ℓ_{m,−s}(θ) e^{imφ}``.
+    """
+    theta = np.asarray(theta, float).ravel()
+    phi = np.asarray(phi, float).ravel()
+    modes = mode_list(s, L)
+    Y = np.empty((theta.size, len(modes)), dtype=complex)
+    for col, (l, m) in enumerate(modes):
+        Nl = sqrt((2 * l + 1) / (4.0 * np.pi))
+        Y[:, col] = Nl * wigner_d(l, m, -s, theta) * np.exp(1j * m * phi)
+    return Y
+
+
+def fit_coeffs(s: int, L: int, theta, phi, values, weights=None,
+               rcond=1e-8) -> np.ndarray:
+    """Least-squares spin-``s`` coefficients from scattered samples.
+
+    Minimizes ``Σ_i w_i |Σ_{ℓm} C_{ℓm} ₍s₎Y_{ℓm}(θ_i,φ_i) − values_i|²`` and
+    returns ``C`` in the dense ``C[ℓ, ℓ+m]`` layout. Use for fields known only
+    on an irregular spherical mesh (e.g. the conformal Hopf field).
+    """
+    theta = np.asarray(theta, float).ravel()
+    phi = np.asarray(phi, float).ravel()
+    v = np.asarray(values, complex).ravel()
+    Y = eval_basis(s, L, theta, phi)
+    if weights is not None:
+        sw = np.sqrt(np.asarray(weights, float).ravel())
+        Y = Y * sw[:, None]
+        v = v * sw
+    sol, *_ = np.linalg.lstsq(Y, v, rcond=rcond)
+    C = empty_coeffs(L)
+    for col, (l, m) in enumerate(mode_list(s, L)):
+        C[l, l + m] = sol[col]
+    return C
+
+
+# ---------------------------------------------------------------------------
+# Wigner-D rotation of coefficients (rotation augmentation in σ-space)
+# ---------------------------------------------------------------------------
+
+def euler_zyz(R: np.ndarray):
+    """ZYZ Euler angles ``(α, β, γ)`` of an active rotation
+    ``R = R_z(α) R_y(β) R_z(γ)``."""
+    R = np.asarray(R, float)
+    beta = np.arccos(np.clip(R[2, 2], -1.0, 1.0))
+    if np.sin(beta) > 1e-9:
+        alpha = np.arctan2(R[1, 2], R[0, 2])
+        gamma = np.arctan2(R[2, 1], -R[2, 0])
+    else:                                   # gimbal: fold γ into α
+        alpha = np.arctan2(R[1, 0], R[0, 0])
+        gamma = 0.0
+    return alpha, beta, gamma
+
+
+def wigner_D(l: int, R: np.ndarray) -> np.ndarray:
+    """Wigner-D matrix ``D^ℓ_{m'm}(R) = e^{-im'α} d^ℓ_{m'm}(β) e^{-imγ}`` (active
+    convention), shape ``(2ℓ+1, 2ℓ+1)`` indexed by ``m', m ∈ [-ℓ, ℓ]``.
+
+    Self-contained (reuses :func:`wigner_d`); verified in tests against the
+    grid-rotation ground truth and the ``spherical`` oracle.
+    """
+    a, b, g = euler_zyz(R)
+    bt = np.array([b])
+    D = np.empty((2 * l + 1, 2 * l + 1), dtype=complex)
+    for mp in range(-l, l + 1):
+        for mm in range(-l, l + 1):
+            D[mp + l, mm + l] = (np.exp(-1j * mp * a)
+                                 * wigner_d(l, mp, mm, bt)[0]
+                                 * np.exp(-1j * mm * g))
+    return D
+
+
+def rotate_coeffs(C: np.ndarray, R: np.ndarray) -> np.ndarray:
+    """Rotate coefficients by ``R`` (per degree ``a'_{ℓm'} = Σ_m D^ℓ_{m'm} a_{ℓm}``)
+    so the implied field becomes ``f(R^{-1}·)``. Works for any spin (the D^ℓ are
+    spin-independent)."""
+    L = C.shape[0] - 1
+    out = empty_coeffs(L)
+    for l in range(L + 1):
+        if l == 0:
+            out[0, 0] = C[0, 0]
+            continue
+        out[l, 0:2 * l + 1] = wigner_D(l, R) @ C[l, 0:2 * l + 1]
+    return out
