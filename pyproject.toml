@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bottlegen"
+version = "0.0.1"
+description = "Genus-0 bottle generator via inverse Willmore flow"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy",
+    "scipy",
+]
+
+[project.optional-dependencies]
+# Networks / data / geometry pipeline (added in later sessions).
+nets = ["torch", "einops", "omegaconf"]
+geom = ["trimesh", "pymeshlab", "robust-laplacian", "polyscope"]
+spectral = ["torch-harmonics", "spherical", "quaternionic"]
+dev = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["bottlegen*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
