@@ -14,12 +14,12 @@ import numpy as np
 
 @dataclass(frozen=True)
 class GLGrid:
-    """Gauss-Legendre x equiangular grid for bandlimit ``L``."""
+    """Gauss-Legendre x equiangular grid for bandlimit ``L`` (max degree)."""
 
     L: int
     theta: np.ndarray   # (Nθ,) polar angles in (0, π)
     phi: np.ndarray     # (Nφ,) azimuthal angles in [0, 2π)
-    wtheta: np.ndarray  # (Nθ,) GL weights in x = cos θ (already the sinθ dθ measure)
+    wtheta: np.ndarray  # (Nθ,) GL weights in x = cos θ (carry the sinθ dθ measure)
 
     @property
     def ntheta(self) -> int:
@@ -41,9 +41,9 @@ def gl_grid(L: int) -> GLGrid:
 
 
 def solid_angle_weights(grid: GLGrid) -> np.ndarray:
-    """Quadrature weights ``w[j,k]`` for ``∫ f dΩ ≈ Σ w[j,k] f(θ_j, φ_k)``.
+    """Weights ``w[j,k]`` for ``∫ f dΩ ≈ Σ w[j,k] f(θ_j, φ_k)``.
 
-    ``dΩ = sinθ dθ dφ``; the GL weights already carry ``sinθ dθ`` (via x=cosθ),
-    and the azimuth contributes the uniform factor ``2π/Nφ``.
+    ``dΩ = sinθ dθ dφ``; the GL weights carry ``sinθ dθ`` (via x=cosθ), and the
+    azimuth contributes the uniform factor ``2π/Nφ``.
     """
     return grid.wtheta[:, None] * (2.0 * np.pi / grid.nphi)

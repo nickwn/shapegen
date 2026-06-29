@@ -24,12 +24,15 @@ assert them. If a library disagrees, wrap it and verify against these.
 ## Spin-weighted spherical harmonics (SWSH)
 
 - `₍s₎Y_{ℓm}` defined for ℓ ≥ |s|, m ∈ [−ℓ, ℓ].
-- **Definition used here** (single internally-consistent convention; anchored to
-  scipy `sph_harm_y` at s=0):
+- **Backend:** self-contained NumPy/SciPy (float64, no heavy deps). The basis is
+  built from the Wigner small-d function (Wigner sum formula). The convention is
+  verified against the `spherical` package (independent oracle, tests only) at
+  every spin and scipy `sph_harm_y` at spin 0.
+- **Definition:**
   `₍s₎Y_{ℓm}(θ,φ) = √((2ℓ+1)/4π) d^ℓ_{m,−s}(θ) e^{imφ}`,
-  with `d` the Wigner small-d function (Wigner sum formula); the Condon–Shortley
-  phase already lives inside `d^ℓ_{m,−s}`, so spin 0 reproduces scipy
-  `sph_harm_y` exactly. Orthonormal: `∫ ₍s₎Y_{ℓm} ₍s₎Ȳ_{ℓ'm'} dΩ = δ_{ℓℓ'} δ_{mm'}`.
+  with `d` the Wigner small-d function; the Condon–Shortley phase lives inside
+  `d^ℓ_{m,−s}`, so spin 0 reproduces scipy `sph_harm_y` exactly. Orthonormal:
+  `∫ ₍s₎Y_{ℓm} ₍s₎Ȳ_{ℓ'm'} dΩ = δ_{ℓℓ'} δ_{mm'}`.
 - **Ladder:** `ð ₍s₎Y = +√((ℓ−s)(ℓ+s+1)) ₍s+1₎Y`,
   `ð̄ ₍s₎Y = −√((ℓ+s)(ℓ−s+1)) ₍s−1₎Y`.
 - **Spin-s Laplacian** `Δ_s = ½(ðð̄ + ð̄ð)`, eigenvalue `−[ℓ(ℓ+1)−s²]`.
@@ -41,8 +44,10 @@ assert them. If a library disagrees, wrap it and verify against these.
 - Dense complex array `C[ℓ, ℓ+m]` of shape `(L+1, 2L+1)`, for ℓ ∈ [0..L],
   m ∈ [−ℓ..ℓ] (column index `ℓ+m` ∈ [0, 2ℓ]). Unused entries are zero.
 - Grid: Gauss–Legendre in θ (`Nθ = L+1` nodes in `x=cosθ`), equiangular in φ
-  (`Nφ = 2L+1`). This makes `analy∘synth = id` exactly for band-limited spin
-  fields (the relevant products are degree-≤2L polynomials in cosθ).
+  (`Nφ = 2L+1`). This makes `analy∘synth = id` for band-limited spin fields (the
+  relevant products are degree-≤2L polynomials in cosθ): ~1e-12 at L=16. The
+  factorial sum loses accuracy past L≈24 — switch to a recursive backend
+  (e.g. `s2fft`) if much higher bandlimits are ever needed.
 
 ## State algebra
 

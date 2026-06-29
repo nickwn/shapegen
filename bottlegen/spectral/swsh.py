@@ -1,15 +1,22 @@
 """Spin-weighted spherical-harmonic (SWSH) transforms and the ð ladder.
 
-Single internally-consistent convention (see CONVENTIONS.md), anchored to scipy
-``sph_harm_y`` at spin 0:
+Self-contained NumPy/SciPy implementation (float64, zero heavy deps). The basis
+is built from the Wigner small-d function (Wigner sum formula); the convention is
+verified in the tests against the ``spherical`` package (independent oracle) at
+every spin and scipy ``sph_harm_y`` at spin 0, namely
 
-    ₍s₎Y_{ℓm}(θ,φ) = (-1)^m √((2ℓ+1)/4π) d^ℓ_{m,-s}(θ) e^{imφ}
+    ₍s₎Y_{ℓm}(θ,φ) = √((2ℓ+1)/4π) d^ℓ_{m,−s}(θ) e^{imφ}   (Condon-Shortley).
 
-with ``d`` the Wigner small-d function (Wigner sum formula, Condon-Shortley
-included). Coefficients live in a dense complex array ``C[ℓ, ℓ+m]`` of shape
-``(L+1, 2L+1)``; entries with ℓ < |s| or |m| > ℓ are zero.
+Coefficients live in a dense complex array ``C[ℓ, ℓ+m]`` of shape
+``(L+1, 2L+1)`` (column index ``ℓ+m`` ∈ [0, 2ℓ]); entries with ℓ < |s| or
+|m| > ℓ are zero.
 
-Everything here is float64 NumPy (geometry-side precision).
+Transforms use a Gauss-Legendre (θ) x equiangular (φ) grid with ``Nθ = L+1`` and
+``Nφ = 2L+1``, which makes ``analy∘synth = id`` exactly for band-limited spin
+fields (the relevant products are degree-≤2L polynomials in cosθ). The sum
+formula is accurate to ~1e-12 at the project's default L=16 (and stays under the
+test tolerances through L≈24, beyond which cancellation in the factorial sum
+starts to matter).
 """
 
 from functools import lru_cache
@@ -18,6 +25,12 @@ from math import factorial as _fac, sqrt
 import numpy as np
 
 from .grids import gl_grid, solid_angle_weights
+
+__all__ = [
+    "wigner_d", "swsh", "empty_coeffs", "synth", "analy",
+    "edth", "edthbar", "edth_factor", "edthbar_factor",
+    "spin_laplacian", "laplacian_eig", "hopf_scaling", "q_from_sigma",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -61,9 +74,9 @@ def _basis(s: int, L: int):
     for l in range(abs(s), L + 1):
         Nl = sqrt((2 * l + 1) / (4.0 * np.pi))
         for m in range(-l, l + 1):
-            d = wigner_d(l, m, -s, th)
-            # Condon-Shortley phase already sits inside d^ℓ_{m,-s}; with this
+            # Condon-Shortley phase sits inside d^ℓ_{m,-s}; with this
             # normalization spin 0 matches scipy.sph_harm_y exactly.
+            d = wigner_d(l, m, -s, th)
             Y[(l, m)] = Nl * d[:, None] * eim[m][None, :]
     return Y
 
@@ -78,7 +91,7 @@ def swsh(s: int, l: int, m: int, L: int) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def empty_coeffs(L: int) -> np.ndarray:
-    """Zeroed coefficient array of shape ``(L+1, 2L+1)``."""
+    """Zeroed coefficient array of shape ``(L+1, 2L+1)`` (layout ``C[ℓ, ℓ+m]``)."""
     return np.zeros((L + 1, 2 * L + 1), dtype=complex)
 
 
@@ -108,7 +121,7 @@ def analy(field: np.ndarray, s: int, L: int) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Ladder operators, Laplacian, and the Hopf scaling
+# Ladder operators, Laplacian, and the Hopf scaling (pure coefficient ops)
 # ---------------------------------------------------------------------------
 
 def edth(C: np.ndarray, s: int) -> np.ndarray:

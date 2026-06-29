@@ -16,8 +16,10 @@ dependencies = [
 # Networks / data / geometry pipeline (added in later sessions).
 nets = ["torch", "einops", "omegaconf"]
 geom = ["trimesh", "pymeshlab", "robust-laplacian", "polyscope"]
-spectral = ["torch-harmonics", "spherical", "quaternionic"]
-dev = ["pytest"]
+# spherical + quaternionic: independent SWSH oracle (tests) and, later, the
+# Wigner-D rotation augmentation. Not required at runtime.
+spectral = ["spherical", "quaternionic"]
+dev = ["pytest", "spherical", "quaternionic"]
 
 [tool.setuptools.packages.find]
 include = ["bottlegen*"]
