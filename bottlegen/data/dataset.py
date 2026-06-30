@@ -18,7 +18,7 @@ from ..spectral import swsh
 
 __all__ = [
     "random_so3", "wigner_rotate_sigma", "list_cache", "load_record",
-    "BottleSigma",
+    "BottleSigma", "demo_bumpy_dataset",
 ]
 
 
@@ -59,6 +59,32 @@ def load_record(path: str) -> dict:
     """Load one cached record (``sigma_hat`` plus metadata)."""
     with np.load(path, allow_pickle=True) as z:
         return {k: z[k] for k in z.files}
+
+
+def demo_bumpy_dataset(n=16, L=12, subdiv=3, seed=0):
+    """Synthesize a small in-class σ̂ dataset (no ShapeNet needed) by encoding
+    randomly deformed genus-0 'bottle-ish' meshes — a surface of revolution with
+    a neck plus low-order bumps, some strong enough to be non-star. For demos /
+    the Session 7 sample script when ``cache/`` is empty.
+    """
+    from ..geom import conformal as cf
+    from ..geom.mesh import Mesh, icosphere
+    rng = np.random.default_rng(seed)
+    base = icosphere(subdiv)
+    V0 = base.vertices
+    z = V0[:, 2]
+    out = []
+    for _ in range(n):
+        # bottle profile: wide body, pinched neck near the top
+        neck = 1.0 - 0.45 * np.exp(-((z - 0.7) ** 2) / 0.05)
+        body = 1.0 + 0.18 * (z ** 2 - 0.3)
+        r = neck * body
+        # random low-order bumps (can push concave -> non-star)
+        r = r + 0.12 * rng.standard_normal() * (V0[:, 0] ** 2 - V0[:, 1] ** 2)
+        r = r + 0.10 * rng.standard_normal() * V0[:, 0] * V0[:, 2]
+        m = Mesh(V0 * r[:, None], base.faces)
+        out.append(cf.mesh_to_sigma(m, L=L))
+    return out
 
 
 # --------------------------------------------------------------------------- #

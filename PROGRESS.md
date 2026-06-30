@@ -113,8 +113,58 @@ rotation-invariant to 6e-16. Appendix B row 9 ✅.
 > encode∘decode round trip is an approximate inverse (~0.34 spectral) as the
 > plan anticipates.
 
-## Session 7 — Simple model: SH cold-diffusion DiT (MVP) — TODO
-## Session 8 — Decode, adaptive sampling, eval — TODO
+## Session 7 — Simple model: SH cold-diffusion DiT (MVP) ✅
+
+**Files:** `bottlegen/models/{pack,blocks,sh_dit,losses,cold_diffusion,training}.py`,
+`bottlegen/util.py`, `train/train_simple.py`, `scripts/sample_simple.py`,
+`configs/simple.yaml`, `tests/test_simple.py`.
+
+- Shared real-packed layout (`pack.PackSpec`) so the NumPy loader, the torch
+  blur, and the DiT agree; `blur_packed` reproduces the analytic complex blur to
+  1e-6; `packed_to_sigma` (unpack + Hermitian-symmetrize + gauge fix).
+- Degree-tokenized `SHDiT` (one token per ℓ∈[2,L]) with AdaLN-Zero blocks +
+  sinusoidal timestep embedding (conditioned on *normalized* t/t_max, important
+  since t_max≈1e-4); 32.6 M params at the default `d=384,depth=12`.
+- Cold-diffusion x0-training (`ColdDiffusion.loss_step`), Sobolev/whitened loss,
+  EMA, packed `TerminalPriorPacked` seed, deterministic restoration sampler.
+- Free Wigner-D rotation augmentation in the training loop; CLI driver +
+  sampler (OBJ + matplotlib contact sheet + Willmore/genus/non-star metrics),
+  with a synthetic `demo_bumpy_dataset` fallback when `cache/` is empty.
+
+**DoD met.** 8 tests green (CPU, tiny model). **Overfit 1: 8.2e-3 → 1.1e-8;
+overfit 10: 9.7e-3 → 1.5e-7** (loss → 0); samples decode to finite-W genus-0
+meshes; packed blur == analytic. Demo end-to-end run: synthetic data → train
+(loss 4.2e-3 → 7.2e-7 on MPS) → sample → decode → contact sheet under
+`reports/simple_demo/`. Appendix B row 10 ✅. **MVP milestone.**
+
+## Session 8 — Decode, adaptive sampling, eval ✅
+
+**Files:** `bottlegen/decode/{reconstruct,sample_points}.py`,
+`bottlegen/eval/{metrics,viz}.py`, `tests/test_decode.py`,
+`scripts/eval_decode.py`, updated `scripts/sample_simple.py`.
+
+- **Robust σ̂→mesh (`decode.reconstruct.decode`)** — amplitude *trust region*
+  around the Dirac decode: the linear init amplifies high-ℓ by (ℓ(ℓ+1))² and can
+  fold the surface, so it takes the largest amplitude scale `s∈(0,1]` that stays
+  a valid non-degenerate genus-0 mesh (no flipped faces, bounded W). Rescues the
+  folded L=20 case (flip 0.15→0.00) while keeping s=1 where stable.
+- **Adaptive sampling (`sample_points`)** — closed-form sizing field
+  `h = 1/√(c0+|q|)` from the Hopf differential; curvature-weighted surface
+  sampling (denser where |q| is large).
+- **Metrics (`eval.metrics`)** — Willmore, Chamfer, per-degree power, genus,
+  vectorized non-star fraction (Möller–Trumbore), triangle quality, valence.
+  **Viz (`eval.viz`)** — contact sheet, scalar-on-mesh, power-spectrum overlay.
+
+**DoD met.** 8 tests green. Trust region guarantees valid genus-0 output even
+where the naive decode folds; in-range decode Chamfer 0.054 < sphere baseline;
+sizing field anti-correlates with |q| (corr −0.97); adaptive samples biased to
+high curvature. Eval report `reports/decode_eval/` (input-vs-decode sheet, |q|
+field, data-vs-encode∘decode spectrum). Appendix B row 11 ✅.
+
+**Key finding.** The decode is a linearized approximate inverse: L≈12–16 is its
+stable sweet spot; higher L doesn't add fidelity (it folds, and the trust region
+flattens it). Faithful sharp-feature (neck) decoding needs the physics-matched /
+true Willmore flow (Session 10), as the plan's risk register anticipates.
 ## Session 9 — DiffusionNet set-latent VAE — TODO
 ## Session 10 — Rectified flow (vanilla → physics-matched) — TODO
 ## Session 11 — Quad meshing from cross field — TODO
