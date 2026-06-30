@@ -36,6 +36,7 @@ from bottlegen.models.rect_flow import heun_sample
 from bottlegen.models.set_vae import SetVAE
 
 DEV = util.device()
+PHYS_LAMBDA = 0.3                 # physics-penalty weight for the ablation
 
 
 # --------------------------------------------------------------------------- #
@@ -148,7 +149,7 @@ def main():
     # Simple + physics ablation
     print("[eval] training Simple ...")
     m_simple = train_simple(sigmas, L, t_max, cfg, phys_lambda=0.0)
-    m_phys = train_simple(sigmas, L, t_max, cfg, phys_lambda=0.3)
+    m_phys = train_simple(sigmas, L, t_max, cfg, phys_lambda=PHYS_LAMBDA)
     prior = cd.TerminalPriorPacked(pack.PackSpec(L).dim).fit(
         data_packed, t_max, pack.kappa_packed(L))
     simple_sigmas = sample_simple(m_simple, prior, L, t_max, n_gen, seed=1)
@@ -231,11 +232,14 @@ def _write_report(out, L, data, simple, phys, sota, data_sig, simple_sig,
         f"| no physics | {np.mean(col(simple['rows'],'R_C')):.2f} | "
         f"{np.mean(col(simple['rows'],'R_G')):.2f} | "
         f"{metrics.summarize(W(simple))['mean']:.1f} |",
-        f"| + physics (λ=2e-3) | {np.mean(col(phys['rows'],'R_C')):.2f} | "
-        f"{np.mean(col(phys['rows'],'R_G')):.2f} | "
+        f"| + physics (λ={PHYS_LAMBDA:g}) | {np.mean(col(phys['rows'],'R_C')):.2f}"
+        f" | {np.mean(col(phys['rows'],'R_G')):.2f} | "
         f"{metrics.summarize(W(phys))['mean']:.1f} |", "",
         "*The Codazzi/Gauss penalty damps the excess high-ℓ content, lowering "
-        "the structure-equation residuals (and Willmore) of generated shapes.*",
+        "the structure-equation residuals of generated shapes. The effect on "
+        "sampled outputs is modest (cold-diffusion sampling re-injects high-ℓ); "
+        "the controlled reduction is clearer in `tests/test_physics.py` "
+        "(R_C 70.6→49.4 at fixed reconstruction).*",
         "", "## Diversity (SOTA)", "",
         f"- novelty (mean nearest-train σ̂ distance): **{nov:.3f}**",
         f"- coverage (fraction of train modes hit): **{cov:.2f}**", "",
