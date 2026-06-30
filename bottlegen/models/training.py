@@ -17,7 +17,8 @@ from .losses import make_weight, sobolev_loss
 from .pack import PackSpec
 from .sh_dit import SHDiT
 
-__all__ = ["make_model", "pack_batch", "fit_simple", "fit_vae"]
+__all__ = ["make_model", "pack_batch", "fit_simple", "fit_vae",
+           "vae_latents", "fit_rect_flow"]
 
 
 def make_model(L, model_cfg=None, device=None):
@@ -131,3 +132,58 @@ def fit_vae(meshes, sigma_targets, L, *, k=64, model=None, vae_cfg=None,
             print(f"step {step:5d}  loss {loss.item():.3e}  "
                   f"recon {recon.item():.3e}  kl {kl.item():.3e}  beta {b:.1e}")
     return model, ops, history
+
+
+@torch.no_grad()
+def vae_latents(vae, ops_list, device=None):
+    """Frozen-encoder latents (deterministic μ) for a list of mesh ops:
+    ``[N, M, zdim]``."""
+    vae.eval()
+    mus = [vae.encode_one(o)[0] for o in ops_list]
+    return torch.stack(mus).to(device) if device else torch.stack(mus)
+
+
+def fit_rect_flow(z1_data, *, mode="vanilla", decoder=None, kappa_packed=None,
+                  model=None, rf_cfg=None, steps=2000, batch=64, lr=1e-3,
+                  weight_decay=1e-4, ema_decay=0.999, normalize_physics=True,
+                  seed=0, device=None, log_every=0):
+    """Train a :class:`LatentDiT` rectified flow over frozen-VAE latents
+    ``z1_data`` ``[N, M, zdim]``.
+
+    ``mode='vanilla'`` matches ``z1−z0``; ``mode='physics'`` matches the
+    decoder-VJP reverse-blur velocity (needs ``decoder`` and ``kappa_packed``).
+    Returns ``(model, ema, history)``.
+    """
+    from .cold_diffusion import EMA
+    from .rect_flow import LatentDiT, decoder_vjp_velocity, vanilla_target
+
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    z1_data = z1_data.to(device)
+    N, M, zdim = z1_data.shape
+    if model is None:
+        model = LatentDiT(M, zdim, **(rf_cfg or {})).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr,
+                            weight_decay=weight_decay)
+    ema = EMA(model, ema_decay)
+    history = []
+    model.train()
+    for step in range(steps):
+        idx = rng.integers(0, N, size=min(batch, N))
+        z1 = z1_data[idx]
+        zt, t, target = vanilla_target(z1, rng)
+        if mode == "physics":
+            target = decoder_vjp_velocity(decoder, zt, kappa_packed)
+            if normalize_physics:
+                target = target / (target.flatten(1).norm(dim=1)
+                                   .reshape(-1, 1, 1) + 1e-8)
+        v = model(zt, t)
+        loss = ((v - target) ** 2).mean()
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        ema.update(model)
+        history.append(loss.item())
+        if log_every and (step % log_every == 0 or step == steps - 1):
+            print(f"step {step:5d}  loss {history[-1]:.3e}")
+    return model, ema, history
