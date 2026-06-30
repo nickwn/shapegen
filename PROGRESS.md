@@ -165,7 +165,36 @@ field, data-vs-encode∘decode spectrum). Appendix B row 11 ✅.
 stable sweet spot; higher L doesn't add fidelity (it folds, and the trust region
 flattens it). Faithful sharp-feature (neck) decoding needs the physics-matched /
 true Willmore flow (Session 10), as the plan's risk register anticipates.
-## Session 9 — DiffusionNet set-latent VAE — TODO
+## Session 9 — DiffusionNet set-latent VAE ✅
+
+**Files:** `bottlegen/geom/diffusion_ops.py`,
+`bottlegen/models/{diffusionnet,set_vae}.py`, `bottlegen/models/training.py`
+(`fit_vae`), `train/train_vae.py`, `scripts/sample_vae.py`, `configs/sota.yaml`,
+`tests/test_vae.py`.
+
+- **Per-mesh operators (`diffusion_ops`)** — LB eigenbasis (generalized cotan
+  eigenpairs, shift-invert) + sparse tangent-gradient operators (per-vertex
+  least-squares over the 1-ring); the cached geometry DiffusionNet consumes.
+- **DiffusionNet (`diffusionnet`)** — learned per-channel spectral heat
+  diffusion + rotation-invariant tangent-gradient feature magnitudes + MLP;
+  `ops_to_torch` (dense or sparse gradient ops).
+- **SetVAE (`set_vae`)** — DiffusionNet → M learned query tokens cross-attend
+  (permutation-invariant set pooling) → (μ, logσ²) latent set → `SigmaDecoder`
+  (per-degree query tokens cross-attend to latents) → packed σ̂. Loss = Sobolev
+  σ̂ reconstruction + β-annealed KL.
+
+**DoD met.** 7 tests green. LB constant 0-mode; tangent gradient kills constants
+to 1e-8; **permutation-invariant latents** (vertex shuffle, 1e-5);
+**autoencodes distinct shapes** (self-corr 0.98/0.99/0.97, off-diag −0.32 — it
+differentiates, not a shared mean); KL finite; **smooth latent traversal**
+(total 0.47, even steps). Recon + traversal contact sheets under
+`reports/sota_vae/`. Appendix B row 12 ✅.
+
+**Note.** Whitening the recon loss (right for the denoiser DiT) inverts the σ̂
+amplitude weighting here (matches high-ℓ noise), so the VAE uses raw Sobolev
+(`whiten=false`). DiffusionNet gradient ops are dense for the small meshes here;
+`sparse_grad=True` for production-scale (~10k-vertex) meshes.
+
 ## Session 10 — Rectified flow (vanilla → physics-matched) — TODO
 ## Session 11 — Quad meshing from cross field — TODO
 ## Session 12 — Physics-prior losses, full eval, ablations — TODO

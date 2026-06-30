@@ -17,7 +17,7 @@ from .losses import make_weight, sobolev_loss
 from .pack import PackSpec
 from .sh_dit import SHDiT
 
-__all__ = ["make_model", "pack_batch", "fit_simple"]
+__all__ = ["make_model", "pack_batch", "fit_simple", "fit_vae"]
 
 
 def make_model(L, model_cfg=None, device=None):
@@ -86,3 +86,48 @@ def fit_simple(sigma_stack, L, t_max, *, model=None, model_cfg=None,
             print(f"step {step:5d}  loss {history[-1]:.3e}  "
                   f"lr {opt.param_groups[0]['lr']:.2e}")
     return model, ema, history
+
+
+def fit_vae(meshes, sigma_targets, L, *, k=64, model=None, vae_cfg=None,
+            steps=500, batch=8, lr=1e-3, weight_decay=1e-4, beta=1e-4,
+            beta_warmup=200, sobolev_beta=1.0, whiten=False, seed=0,
+            device=None, log_every=0):
+    """Train the set-latent VAE to autoencode meshes → σ̂. Returns
+    ``(model, ops, history)`` where ``ops`` are the cached torch operators and
+    ``history`` is a list of ``(loss, recon, kl)``."""
+    from ..geom.diffusion_ops import mesh_operators
+    from .diffusionnet import ops_to_torch
+    from .set_vae import SetVAE, vae_loss
+
+    rng = np.random.default_rng(seed)
+    torch.manual_seed(seed)
+    ops = [ops_to_torch(mesh_operators(m.vertices, m.faces, k), device)
+           for m in meshes]
+    tgt_complex = [state.gauge_fix(np.asarray(s, complex)) for s in sigma_targets]
+    targets = torch.as_tensor(
+        np.stack([state.real_pack(s) for s in tgt_complex]).astype(np.float32),
+        device=device)
+    stats = state.perdeg_std(np.stack(tgt_complex))
+    weight = make_weight(L, sobolev_beta, stats if whiten else None,
+                         device=device)
+    if model is None:
+        model = SetVAE(L=L, **(vae_cfg or {})).to(device)
+    opt = torch.optim.AdamW(model.parameters(), lr=lr,
+                            weight_decay=weight_decay)
+    n = len(meshes)
+    history = []
+    model.train()
+    for step in range(steps):
+        idx = rng.choice(n, size=min(batch, n), replace=False)
+        ops_b = [ops[i] for i in idx]
+        b = beta * min(1.0, step / max(1, beta_warmup))      # KL anneal
+        pred, mu, lv = model(ops_b, sample=True)
+        loss, recon, kl = vae_loss(pred, targets[idx], mu, lv, weight, b)
+        opt.zero_grad(set_to_none=True)
+        loss.backward()
+        opt.step()
+        history.append((loss.item(), recon.item(), kl.item()))
+        if log_every and (step % log_every == 0 or step == steps - 1):
+            print(f"step {step:5d}  loss {loss.item():.3e}  "
+                  f"recon {recon.item():.3e}  kl {kl.item():.3e}  beta {b:.1e}")
+    return model, ops, history

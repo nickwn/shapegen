@@ -18,7 +18,7 @@ from ..spectral import swsh
 
 __all__ = [
     "random_so3", "wigner_rotate_sigma", "list_cache", "load_record",
-    "BottleSigma", "demo_bumpy_dataset",
+    "BottleSigma", "demo_bumpy_dataset", "demo_bottle_meshes",
 ]
 
 
@@ -61,13 +61,10 @@ def load_record(path: str) -> dict:
         return {k: z[k] for k in z.files}
 
 
-def demo_bumpy_dataset(n=16, L=12, subdiv=3, seed=0):
-    """Synthesize a small in-class σ̂ dataset (no ShapeNet needed) by encoding
-    randomly deformed genus-0 'bottle-ish' meshes — a surface of revolution with
-    a neck plus low-order bumps, some strong enough to be non-star. For demos /
-    the Session 7 sample script when ``cache/`` is empty.
-    """
-    from ..geom import conformal as cf
+def demo_bottle_meshes(n=16, subdiv=3, seed=0):
+    """Synthesize ``n`` genus-0 'bottle-ish' meshes (no ShapeNet needed): a
+    surface of revolution with a pinched neck plus random low-order bumps (some
+    strong enough to be non-star). Used by the demo/eval paths."""
     from ..geom.mesh import Mesh, icosphere
     rng = np.random.default_rng(seed)
     base = icosphere(subdiv)
@@ -75,16 +72,21 @@ def demo_bumpy_dataset(n=16, L=12, subdiv=3, seed=0):
     z = V0[:, 2]
     out = []
     for _ in range(n):
-        # bottle profile: wide body, pinched neck near the top
         neck = 1.0 - 0.45 * np.exp(-((z - 0.7) ** 2) / 0.05)
         body = 1.0 + 0.18 * (z ** 2 - 0.3)
         r = neck * body
-        # random low-order bumps (can push concave -> non-star)
         r = r + 0.12 * rng.standard_normal() * (V0[:, 0] ** 2 - V0[:, 1] ** 2)
         r = r + 0.10 * rng.standard_normal() * V0[:, 0] * V0[:, 2]
-        m = Mesh(V0 * r[:, None], base.faces)
-        out.append(cf.mesh_to_sigma(m, L=L))
+        out.append(Mesh(V0 * r[:, None], base.faces))
     return out
+
+
+def demo_bumpy_dataset(n=16, L=12, subdiv=3, seed=0):
+    """The :func:`demo_bottle_meshes` family encoded to σ̂ (the Session-7 sample
+    prior fallback when ``cache/`` is empty)."""
+    from ..geom import conformal as cf
+    return [cf.mesh_to_sigma(m, L=L)
+            for m in demo_bottle_meshes(n, subdiv, seed)]
 
 
 # --------------------------------------------------------------------------- #
