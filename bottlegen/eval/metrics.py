@@ -16,7 +16,7 @@ from ..geom.operators import vertex_areas
 __all__ = [
     "willmore_energy", "flip_fraction", "genus", "nonstar_fraction",
     "chamfer", "per_degree_power", "triangle_quality", "valence_stats",
-    "is_valid_mesh",
+    "is_valid_mesh", "novelty_coverage", "distribution_overlap", "summarize",
 ]
 
 
@@ -120,3 +120,36 @@ def valence_stats(V, F) -> dict:
     return {"mean": float(val.mean()), "min": int(val.min()),
             "max": int(val.max()),
             "frac_irregular": float((val != 6).mean())}
+
+
+def novelty_coverage(gen, train):
+    """``(novelty, coverage)`` between generated and training feature vectors
+    (e.g. real-packed σ̂). Novelty = mean nearest-train distance of generated
+    samples (large ⇒ not memorized); coverage = fraction of train items that are
+    some generated sample's nearest neighbor (large ⇒ diverse, mode-covering)."""
+    gen = np.atleast_2d(gen)
+    train = np.atleast_2d(train)
+    D = np.linalg.norm(gen[:, None, :] - train[None, :, :], axis=2)
+    novelty = float(D.min(1).mean())
+    coverage = len(np.unique(D.argmin(1))) / len(train)
+    return novelty, coverage
+
+
+def distribution_overlap(a, b, bins=12):
+    """Histogram-intersection overlap ∈ [0,1] of two 1-D samples (1 = identical
+    distributions). Used for Willmore / non-star distribution match."""
+    a, b = np.asarray(a), np.asarray(b)
+    lo, hi = min(a.min(), b.min()), max(a.max(), b.max())
+    if hi <= lo:
+        return 1.0
+    edges = np.linspace(lo, hi, bins + 1)
+    ha = np.histogram(a, edges, density=False)[0] / len(a)
+    hb = np.histogram(b, edges, density=False)[0] / len(b)
+    return float(np.minimum(ha, hb).sum())
+
+
+def summarize(values) -> dict:
+    """``mean/median/std/min/max`` of a list of scalars."""
+    v = np.asarray(values, dtype=float)
+    return {"mean": float(v.mean()), "median": float(np.median(v)),
+            "std": float(v.std()), "min": float(v.min()), "max": float(v.max())}

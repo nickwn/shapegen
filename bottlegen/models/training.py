@@ -47,8 +47,13 @@ def fit_simple(sigma_stack, L, t_max, *, model=None, model_cfg=None,
                steps=2000, batch=64, lr=3e-4, weight_decay=1e-4,
                ema_decay=0.999, sobolev_beta=1.0, whiten=True,
                rotate_aug=False, warmup=100, seed=0, device=None,
-               log_every=0):
-    """Train the Simple cold-diffusion DiT. Returns ``(model, ema, history)``."""
+               log_every=0, phys_lambda=0.0):
+    """Train the Simple cold-diffusion DiT. Returns ``(model, ema, history)``.
+
+    ``phys_lambda > 0`` adds the Codazzi spectral physics penalty (a high-ℓ
+    structure-equation regularizer) to the x0 prediction.
+    """
+    from .losses import physics_loss, physics_weight_packed
     rng = np.random.default_rng(seed)
     torch.manual_seed(seed)
     if model is None:
@@ -57,6 +62,8 @@ def fit_simple(sigma_stack, L, t_max, *, model=None, model_cfg=None,
     stats = state.perdeg_std(np.stack([np.asarray(s) for s in sigma_stack]))
     weight = make_weight(L, sobolev_beta, stats if whiten else None,
                          device=device)
+    phys_w = (torch.as_tensor(physics_weight_packed(L), dtype=torch.float32,
+                              device=device) if phys_lambda > 0 else None)
 
     opt = torch.optim.AdamW(model.parameters(), lr=lr,
                             weight_decay=weight_decay)
@@ -77,7 +84,11 @@ def fit_simple(sigma_stack, L, t_max, *, model=None, model_cfg=None,
             pack_batch(sigma_stack, idx, L, rotate_aug, rng), device=device)
         for g in opt.param_groups:
             g["lr"] = lr * lr_at(step)
-        loss = cdiff.loss_step(model, x0, weight, sobolev_loss, rng)
+        tn, tp = cdiff.sample_t(x0.shape[0], rng)
+        pred = model(cdiff.blur(x0, tp), tn)
+        loss = sobolev_loss(pred, x0, weight)
+        if phys_lambda > 0:
+            loss = loss + phys_lambda * physics_loss(pred, phys_w)
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()

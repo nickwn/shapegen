@@ -226,5 +226,52 @@ target implemented here captures the same reverse-Willmore intent using the
 differentiable decoder we have. Sampling uses the vanilla flow (a proper
 transport); the physics target is the velocity-matching ablation.
 
-## Session 11 — Quad meshing from cross field — TODO
-## Session 12 — Physics-prior losses, full eval, ablations — TODO
+## Session 11 — Quad meshing from cross field ✅
+
+**Files:** `bottlegen/geom/transport.py`, `bottlegen/decode/quadmesh.py`,
+`bottlegen/eval/viz.py` (`cross_and_stripes`), `scripts/quad_demo.py`,
+`tests/test_quadmesh.py`.
+
+- Hermitian connection Laplacian for ``mult``-RoSy fields (parallel transport
+  ``ρ_ij`` = edge-direction angle difference between vertex frames); smoothest
+  field = smallest generalized eigenvector.
+- ``cross_field`` (smoothest, or q-guided toward principal directions),
+  geometric per-face ``singularity_indices`` (Σ = χ), ``stripe_field`` (mult=1
+  connection Laplacian carrying a frequency 1-form), rendered as solid bands.
+
+**DoD met.** 7 tests green. Flat grid → λ=−9e-15, |ψ| const (machine precision);
+connection Laplacian Hermitian (0) + PSD; **Σ singularity index = χ = 2 exactly**
+(8 index-¼ singularities) on sphere & ellipsoid; q-guided field aligns to
+principal directions to **0.77°** (random ≈ 22.5°); stripe bands span the field.
+Cross field + stripes rendered on a decoded bottle (`reports/quad/`). Appendix B
+row 14 ✅. (Full MIQ integer-grid quad extraction is the plan's optional
+extension — deferred.)
+
+## Session 12 — Physics-prior losses, full eval, ablations ✅
+
+**Files:** `bottlegen/models/losses.py` (physics residuals), `bottlegen/eval/\
+metrics.py` (distribution/novelty), `bottlegen/models/training.py`
+(`fit_simple(phys_lambda=…)`), `scripts/eval_all.py`, `tests/test_physics.py`.
+
+- Structure-equation residuals: ``gauss_residual``/``codazzi_residual`` field
+  operators (plan signatures) + the spectral ``physics_residual_norms(σ̂)`` and
+  a differentiable packed ``physics_loss``. In the single-potential
+  parameterization the Codazzi residual is a per-degree spectral weight (~ℓ³), so
+  the physics penalty is a geometrically-motivated **high-ℓ regularizer** — it
+  damps exactly the excess high-ℓ that destabilizes the decode.
+- Eval suite: ``novelty_coverage``, ``distribution_overlap``, ``summarize``;
+  ``scripts/eval_all.py`` trains Simple/Simple+physics/SOTA on the demo bottles,
+  decodes, and writes ``reports/eval/eval.md`` (Simple vs SOTA table, physics
+  ablation, diversity, spectra + contact sheets).
+
+**DoD met.** 7 tests green. Residuals vanish at the round sphere (R_C=0,
+R_G=8e-16); physics penalty **reduces R_C 70.6→49.4 with σ̂ recon intact (2e-6)**;
+eval helpers behave. `scripts/eval_all.py` reproduces the report deterministically.
+Appendix B row 15 ✅.
+
+> **Plan complete (Sessions 1–12).** 125 tests pass. Self-contained
+> NumPy/SciPy float64 geometry/spectral/flow core + torch (MPS) networks;
+> `spherical`/`quaternionic` are test-only oracles. The recurring honest thread:
+> the linearized Dirac **decode** is the fidelity ceiling (necks flatten,
+> Sessions 8/10/12) — the σ̂ generation and all kernels are verified, and the
+> faithful nonlinear flow + real ShapeNet ingestion are the clear next steps.
