@@ -54,8 +54,9 @@ from .operators import cotan_laplacian, edge_cotan_weights, vertex_areas
 
 __all__ = [
     "left_matrix", "dirac_assembly", "mass_quaternionic", "dirac_operator",
-    "apply_dirac", "rho_from_lambda", "dirac_residual",
+    "apply_dirac", "dirac_grad_rho", "rho_from_lambda", "dirac_residual",
     "spin_transform", "transformed_edges", "integrate_edges",
+    "integrate_transformed_edges",
     "rho_from_sigma_linear", "reconstruct",
 ]
 
@@ -175,6 +176,49 @@ def dirac_operator(V, F, rho):
     return A, mass_quaternionic(V, F)
 
 
+def dirac_grad_rho(V, F, rho, a, b):
+    """``∂/∂ρ_v ⟨a, A(ρ) b⟩`` for quaternion fields ``a``, ``b`` — the ``∂A/∂ρ``
+    contraction, returned as ``(n,)``.
+
+    This is the one ρ-dependent piece of the adjoint of the eigensolve: with a
+    cotangent ``q`` from ``(A − γM) q = Pᵀ p``, the gradient of a loss through
+    ``λ`` is ``−dirac_grad_rho(V, F, rho, q, lam)``. The sign lives at the call
+    site; this returns the plain derivative of the form.
+
+    From :func:`dirac_operator`'s block, ``ρ`` enters ``A_{pq}`` three times, so
+
+        ∂A_{pq}/∂ρ_p = +e_q/6 + (A_f ρ_q/9)·1̂
+        ∂A_{pq}/∂ρ_q = −e_p/6 + (A_f ρ_p/9)·1̂
+
+    (``1̂`` the real unit quaternion, since the ρ² term is real). Both are
+    scattered, so the diagonal ``p = q`` — where the two linear terms cancel and
+    only ``2A_f ρ_p/9`` survives — comes out right without a special case.
+
+    ``ρ`` is per-vertex P1 here, so each block sees the endpoint values directly.
+    A face-lumped stencil (``ρ_T`` = the mean over the face) would instead carry
+    an extra ⅓ chain factor per vertex; dropping it leaves the gradient direction
+    correct and the magnitude 3× off, which a cosine-only check will not catch.
+    :func:`~tests.test_dirac.test_dirac_grad_rho_matches_fd` gates the magnitude.
+    """
+    n = len(V)
+    Af = triangle_areas(V, F)
+    e = _opposite_edges(V, F)
+    rho = np.asarray(rho, dtype=float)
+    rp = [rho[F[:, p]] for p in range(3)]
+    out = np.zeros(n)
+    for p in range(3):
+        ap = a[F[:, p]]
+        for q in range(3):
+            bq = b[F[:, q]]
+            d_p = e[q] / 6.0
+            d_p[:, 0] += Af * rp[q] / 9.0
+            d_q = -e[p] / 6.0
+            d_q[:, 0] += Af * rp[p] / 9.0
+            np.add.at(out, F[:, p], (ap * qmul(d_p, bq)).sum(1))
+            np.add.at(out, F[:, q], (ap * qmul(d_q, bq)).sum(1))
+    return out
+
+
 def rho_from_lambda(V, F, lam):
     """Per-vertex ``ρ`` best explaining the spinor field ``lam`` — the encode
     side of the spin transform.
@@ -276,12 +320,25 @@ def integrate_edges(V, F, lam):
     """Integrate ``df̃ = λ̄ df λ`` to vertex positions by the per-coordinate
     cotan-Poisson solve ``L x = b``, ``b_i = −Σ_j w_ij ẽ_{i→j}``. Translation is
     the gauge (mean removed)."""
+    edges, _ = edge_cotan_weights(V, F)
+    et = transformed_edges(V, lam, edges[:, 0], edges[:, 1])   # (E,3), i->j
+    return integrate_transformed_edges(V, F, et)
+
+
+def integrate_transformed_edges(V, F, et):
+    """Poisson-integrate an arbitrary per-edge field ``et`` ``(E,3)`` to vertex
+    positions (mean removed).
+
+    Split out of :func:`integrate_edges` because this stage is *linear* in
+    ``et``, which is what lets the adjoint test it by a dot-product identity
+    rather than finite differences. ``X = L⁺ Gᵀ W et``: the pinned solve plus the
+    mean removal together realise the mean-zero pseudoinverse, so the composite
+    is symmetric and is its own adjoint up to ``G`` and ``W``.
+    """
     L, _ = cotan_laplacian(V, F)
     edges, w = edge_cotan_weights(V, F)
     i, j = edges[:, 0], edges[:, 1]
-    et = transformed_edges(V, lam, i, j)          # (E,3), oriented i->j
-    n = len(V)
-    b = np.zeros((n, 3))
+    b = np.zeros((len(V), 3))
     np.add.at(b, i, -w[:, None] * et)
     np.add.at(b, j, w[:, None] * et)              # ẽ_{j→i} = −ẽ_{i→j}
     x = _poisson_solve(L, b)
