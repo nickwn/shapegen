@@ -18,9 +18,28 @@ real 4×4 left-multiplication matrix, making the assembled operator a real
 *symmetric* ``4|V|×4|V|`` sparse matrix and the eigenproblem a standard
 symmetric generalized one.
 
-The spin transform solves ``(X − M_ρ) λ = γ M λ`` for the smallest-|γ| pair
-(``M`` = lumped quaternionic mass, ``M_ρ = M·diag(ρ)``), then integrates the
-transformed edges ``df̃ = λ̄ df λ`` by a per-coordinate cotan-Poisson solve.
+**``X`` is the Dirac *energy*, not the Dirac operator.** Expanding the form,
+
+    λ* X λ = Σ_f |Σ_{p∈f} e_p λ_p|² / (4 A_f)  ≥ 0,
+
+so ``X = D* M_F D`` for the per-face first-order operator
+
+    (Dλ)_f = −(1/2A_f) Σ_{p∈f} e_p λ_p        [units 1/length, a curvature]
+
+and ``X`` is PSD. The curvature change ``ρ`` must therefore enter *inside* that
+norm, where it carries the edge quaternions:
+
+    E(λ) = Σ_f A_f |(Dλ)_f − (ρλ)_f|²,   (ρλ)_f = ⅓ Σ_{p∈f} ρ_p λ_p.
+
+Coupling ``ρ`` through the mass instead (``X − M·diag(ρ)``) makes it a
+1/length² quantity — off from a curvature by a factor of the Laplacian — and no
+real ``ρ`` can then satisfy ``Dλ = ρλ``. The spin transform minimizes ``E`` via
+``A(ρ) λ = γ M λ`` for the *smallest* ``γ`` (``γ ≥ 0`` is the squared Dirac
+residual; ``γ = 0`` iff ``ρ`` is realizable), then integrates the transformed
+edges ``df̃ = λ̄ df λ`` by a per-coordinate cotan-Poisson solve.
+
+:func:`rho_from_lambda` inverts this: the per-vertex ``ρ`` best explaining a
+given ``λ``, so ``mesh → λ → ρ → mesh`` round trips.
 """
 
 from __future__ import annotations
@@ -35,6 +54,7 @@ from .operators import cotan_laplacian, edge_cotan_weights, vertex_areas
 
 __all__ = [
     "left_matrix", "dirac_assembly", "mass_quaternionic", "dirac_operator",
+    "apply_dirac", "rho_from_lambda", "dirac_residual",
     "spin_transform", "transformed_edges", "integrate_edges",
     "rho_from_sigma_linear", "reconstruct",
 ]
@@ -109,15 +129,96 @@ def mass_quaternionic(V, F):
     return sp.diags(np.repeat(a, 4))
 
 
+def apply_dirac(V, F, lam):
+    """Per-face Dirac image ``(Dλ)_f = −(1/2A_f) Σ_{p∈f} e_p λ_p``, shape
+    ``(m, 4)``. Annihilates constants (``Σ_p e_p = 0``), and ``X = D* M_F D``."""
+    A = triangle_areas(V, F)
+    e = _opposite_edges(V, F)
+    acc = sum(qmul(e[p], lam[F[:, p]]) for p in range(3))
+    return -acc / (2.0 * A[:, None])
+
+
 def dirac_operator(V, F, rho):
-    """Return ``(A, M)`` with ``A = X − M·diag(ρ)`` and ``M`` the quaternionic
-    mass, both real symmetric sparse ``(4n, 4n)``. ``rho`` is a per-vertex real
-    array (the change in mean-curvature half-density)."""
-    X = dirac_assembly(V, F)
-    M = mass_quaternionic(V, F)
-    a = vertex_areas(V, F)
-    Mrho = sp.diags(np.repeat(rho * a, 4))
-    return (X - Mrho).tocsr(), M
+    """Return ``(A, M)``: the Dirac-energy operator for the per-vertex curvature
+    change ``rho``, and the lumped quaternionic mass. Both real symmetric sparse
+    ``(4n, 4n)``.
+
+    ``A`` assembles ``E(λ) = Σ_f A_f |(Dλ)_f − ⅓Σ_p ρ_p λ_p|²``; with
+    ``c_p = −e_p/(2A_f) − ρ_p/3`` and ``A_{pq} = Σ_f A_f c̄_p c_q``,
+
+        A_{pq} = Σ_f [ −e_p e_q/(4A_f) − ρ_q e_p/6 + ρ_p e_q/6 + A_f ρ_p ρ_q/9 ]
+
+    which is quaternionic-Hermitian, PSD, and reduces to ``X`` at ``ρ = 0``.
+    """
+    n, m = len(V), len(F)
+    Af = triangle_areas(V, F)
+    e = _opposite_edges(V, F)
+    rp = [np.asarray(rho, dtype=float)[F[:, p]] for p in range(3)]
+    ab = np.arange(4)
+    rows_all, cols_all, vals_all = [], [], []
+    for p in range(3):
+        for q in range(3):
+            block = -qmul(e[p], e[q]) / (4.0 * Af[:, None])
+            block = block - rp[q][:, None] * e[p] / 6.0
+            block = block + rp[p][:, None] * e[q] / 6.0
+            block[:, 0] += Af * rp[p] * rp[q] / 9.0          # real (w) component
+            B = left_matrix(block)                           # (m,4,4)
+            r = (4 * F[:, p])[:, None, None] + ab[None, :, None]
+            c = (4 * F[:, q])[:, None, None] + ab[None, None, :]
+            rows_all.append(np.broadcast_to(r, (m, 4, 4)).ravel())
+            cols_all.append(np.broadcast_to(c, (m, 4, 4)).ravel())
+            vals_all.append(B.ravel())
+    A = sp.coo_matrix(
+        (np.concatenate(vals_all),
+         (np.concatenate(rows_all), np.concatenate(cols_all))),
+        shape=(4 * n, 4 * n)).tocsr()
+    return A, mass_quaternionic(V, F)
+
+
+def rho_from_lambda(V, F, lam):
+    """Per-vertex ``ρ`` best explaining the spinor field ``lam`` — the encode
+    side of the spin transform.
+
+    Minimizes the same ``E(λ)`` over ``ρ`` with ``λ`` fixed, a linear least
+    squares whose normal equations ``K ρ = b`` are sparse and SPD:
+
+        K_{ip} = ⅓ Σ_{f ∋ i,p} A_f ⟨λ_p, λ_i⟩,   b_i = Σ_{f ∋ i} A_f ⟨(Dλ)_f, λ_i⟩.
+
+    Unlike the old mass-coupled form there is no additive gauge: ``ρ`` is pinned
+    (a constant shift is no longer absorbed by ``γ``).
+    """
+    n = len(V)
+    Af = triangle_areas(V, F)
+    w = apply_dirac(V, F, lam)
+    rows, cols, vals = [], [], []
+    b = np.zeros(n)
+    for p in range(3):
+        ip = F[:, p]
+        np.add.at(b, ip, Af * (w * lam[ip]).sum(1))
+        for q in range(3):
+            iq = F[:, q]
+            rows.append(ip)
+            cols.append(iq)
+            vals.append(Af * (lam[iq] * lam[ip]).sum(1) / 3.0)
+    K = sp.coo_matrix((np.concatenate(vals),
+                       (np.concatenate(rows), np.concatenate(cols))),
+                      shape=(n, n)).tocsc()
+    return spla.spsolve(K, b)
+
+
+def dirac_residual(V, F, lam, rho):
+    """Relative Dirac residual ``‖Dλ − ρλ‖ / ‖Dλ‖`` in the area-weighted norm.
+
+    The acceptance gate for the operator: for a λ coming from a genuinely
+    conformal correspondence this must go to zero under refinement.
+    """
+    Af = triangle_areas(V, F)
+    w = apply_dirac(V, F, lam)
+    rl = sum(np.asarray(rho, dtype=float)[F[:, p]][:, None] * lam[F[:, p]]
+             for p in range(3)) / 3.0
+    num = np.sqrt((Af[:, None] * (w - rl) ** 2).sum())
+    den = np.sqrt((Af[:, None] * w ** 2).sum())
+    return float(num / max(den, 1e-30))
 
 
 # --------------------------------------------------------------------------- #
@@ -131,15 +232,20 @@ def _gauge_fix(lam):
     return qmul(lam, qinv(mean)[None, :])
 
 
-def spin_transform(V, F, rho, sigma=1e-6):
-    """Solve ``(X − M_ρ) λ = γ M λ`` for the smallest-|γ| eigenpair via
-    shift-invert near ``sigma``. Returns ``(lam (n,4), gamma)`` with ``lam``
-    gauge-fixed so a constant solution becomes ``λ ≡ 1``."""
+def spin_transform(V, F, rho, sigma=1e-6, k=6):
+    """Solve ``A(ρ) λ = γ M λ`` for the *smallest* ``γ`` via shift-invert near
+    ``sigma``. Returns ``(lam (n,4), gamma)``, ``lam`` gauge-fixed so a constant
+    solution becomes ``λ ≡ 1``.
+
+    ``A`` is PSD, so ``γ ≥ 0`` *is* the squared Dirac residual and the bottom
+    eigenvector is unambiguously the wanted λ — no |γ|-branch ambiguity. Note
+    each quaternionic eigenvalue appears with multiplicity 4 (the right ℍ
+    action), so ``k`` must exceed 4 to see past the bottom cluster.
+    """
     A, M = dirac_operator(V, F, rho)
-    # request a small cluster and pick the eigenvalue closest to 0
-    k = min(4, A.shape[0] - 2)
+    k = min(k, A.shape[0] - 2)
     gammas, vecs = spla.eigsh(A, k=k, M=M, sigma=sigma, which="LM")
-    j = np.argmin(np.abs(gammas))
+    j = int(np.argmin(gammas))
     lam = vecs[:, j].reshape(-1, 4)
     return _gauge_fix(lam), float(gammas[j])
 
@@ -201,16 +307,20 @@ def _poisson_solve(L, b):
 # --------------------------------------------------------------------------- #
 
 def sigma_to_rhodot_mult(l):
-    """Per-degree multiplier mapping a target Hopf potential ``σ̂`` to the
-    Dirac curvature-change drive ``ρ̇`` so that ``encode(decode(σ̂)) ≈ σ̂`` in
-    one pass: ``ρ̇_{ℓm} = −(ℓ(ℓ+1))² σ̂_{ℓm}``.
+    """Per-degree multiplier from the Hopf potential ``σ̂`` to the Dirac
+    curvature drive: ``ρ_{ℓm} = −ℓ(ℓ+1) σ̂_{ℓm}``.
 
-    This is the inverse of the measured linear response of the discrete spin
-    transform, ``g_ℓ = −1/(ℓ(ℓ+1))²`` (the product ``g_ℓ·(ℓ(ℓ+1))²`` is flat
-    across degrees and resolutions). The residual loop then corrects the
-    remaining nonlinearity.
+    Now *derived*, not fitted. A radial perturbation ``r = 1 + ĥ Y_{ℓm}`` has
+    ``σ̂ = −½ĥ`` (degree-independent, measured) and geometric curvature change
+    ``ρ = ½ℓ(ℓ+1)ĥ``, hence ``−ℓ(ℓ+1)``.
+
+    The old value ``−(ℓ(ℓ+1))²`` was calibrated against the mass-coupled
+    operator, whose ``ρ`` was off by a factor of the Laplacian ``ℓ(ℓ+1)``; with
+    :func:`dirac_operator` fixed, ``ρ`` is the true mean-curvature half-density
+    change. Prefer :func:`rho_from_lambda` over this linearization wherever an
+    actual mesh is available — it is exact rather than near-sphere.
     """
-    return -((l * (l + 1.0)) ** 2)
+    return -(l * (l + 1.0))
 
 
 def _synth_perdeg(coeffs, theta, phi, mult):

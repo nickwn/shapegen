@@ -44,20 +44,42 @@ def _gentle_mesh(seed=0, subdiv=4):
 # Trust region: always a valid, non-degenerate genus-0 mesh                   #
 # --------------------------------------------------------------------------- #
 
-def test_trust_region_rescues_high_L_fold():
-    # at L=20 the naive linear-init decode folds badly; the trust region must
-    # back off the amplitude and return a valid mesh.
+def test_high_L_no_longer_folds():
+    # Regression guard for the Dirac operator fix. The old mass-coupled operator
+    # needed a drive of −(ℓ(ℓ+1))² σ̂ — over-powering high ℓ by a factor of
+    # ℓ(ℓ+1) — so the naive decode folded badly at L=20 and the trust region had
+    # to back the amplitude off. With the corrected operator the drive is
+    # −ℓ(ℓ+1) σ̂ and L=20 decodes cleanly at full amplitude.
     m = _bottle_mesh(0)
-    L = 20
-    sig = cf.mesh_to_sigma(m, L=L)
+    sig = cf.mesh_to_sigma(m, L=20)
     base = icosphere(5)
     Vn, Fn = dirac.reconstruct(base.vertices, base.faces, sig)   # naive
     Vt, Ft, info = reconstruct.decode(base.vertices, base.faces, sig,
                                       w_cap=80, return_info=True)
-    print(f"[trust region] naive flip={metrics.flip_fraction(Vn, Fn):.3f} -> "
+    print(f"[high L] naive flip={metrics.flip_fraction(Vn, Fn):.3f} -> "
           f"trust s={info['amplitude']} flip={info['flip']:.3f} W={info['W']:.1f}")
-    assert metrics.flip_fraction(Vn, Fn) > 0.03      # naive really does fold
-    assert info["valid"] and info["flip"] <= 0.02
+    assert metrics.flip_fraction(Vn, Fn) < 0.03      # no longer folds
+    assert info["amplitude"] == 1.0 and info["valid"]
+    assert metrics.genus(Vt, Ft) == 0
+
+
+def test_trust_region_still_backs_off_when_over_driven():
+    # The trust region remains a live guard: an artificially amplified σ̂ still
+    # drives the spin transform into the folding regime, and decode must return
+    # a valid genus-0 mesh at a reduced amplitude.
+    # Willmore energy is the reliable degradation signal here — flip fraction is
+    # non-monotonic in the amplitude once the surface self-folds.
+    m = _bottle_mesh(0)
+    sig = 3.0 * cf.mesh_to_sigma(m, L=20)
+    base = icosphere(5)
+    Vn, Fn = dirac.reconstruct(base.vertices, base.faces, sig)
+    Vt, Ft, info = reconstruct.decode(base.vertices, base.faces, sig,
+                                      w_cap=80, return_info=True)
+    print(f"[over-driven] naive W={metrics.willmore_energy(Vn, Fn):.1f} "
+          f"flip={metrics.flip_fraction(Vn, Fn):.3f} -> trust s={info['amplitude']} "
+          f"W={info['W']:.1f} flip={info['flip']:.3f}")
+    assert metrics.willmore_energy(Vn, Fn) > 80       # over-driven really blows up
+    assert info["amplitude"] < 1.0 and info["valid"]
     assert metrics.genus(Vt, Ft) == 0
 
 
