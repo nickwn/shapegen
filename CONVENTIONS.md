@@ -1,7 +1,8 @@
 # CONVENTIONS.md — authoritative; never drift
 
-These are the fixed conventions for `bottlegen`. Every kernel must conform; tests
-assert them. If a library disagrees, wrap it and verify against these.
+These are the fixed conventions for `bottlegen`, a codec mapping genus-0 surfaces
+to band-limited spherical-harmonic coefficients of ρ. Every kernel must conform;
+tests assert them. If a library disagrees, wrap it and verify against these.
 
 ## Algebra & immersion
 
@@ -21,56 +22,22 @@ assert them. If a library disagrees, wrap it and verify against these.
 - Outward normal; convex-positive curvature. Sphere of radius R: `H = +1/R`,
   `K = +1/R²`, `q = 0`.
 
-## Spin-weighted spherical harmonics (SWSH)
+## Base sphere and gauge
 
-- `₍s₎Y_{ℓm}` defined for ℓ ≥ |s|, m ∈ [−ℓ, ℓ].
-- **Backend:** self-contained NumPy/SciPy (float64, no heavy deps). The basis is
-  built from the Wigner small-d function (Wigner sum formula). The convention is
-  verified against the `spherical` package (independent oracle, tests only) at
-  every spin and scipy `sph_harm_y` at spin 0.
-- **Definition:**
-  `₍s₎Y_{ℓm}(θ,φ) = √((2ℓ+1)/4π) d^ℓ_{m,−s}(θ) e^{imφ}`,
-  with `d` the Wigner small-d function; the Condon–Shortley phase lives inside
-  `d^ℓ_{m,−s}`, so spin 0 reproduces scipy `sph_harm_y` exactly. Orthonormal:
-  `∫ ₍s₎Y_{ℓm} ₍s₎Ȳ_{ℓ'm'} dΩ = δ_{ℓℓ'} δ_{mm'}`.
-- **Ladder:** `ð ₍s₎Y = +√((ℓ−s)(ℓ+s+1)) ₍s+1₎Y`,
-  `ð̄ ₍s₎Y = −√((ℓ+s)(ℓ−s+1)) ₍s−1₎Y`.
-- **Spin-s Laplacian** `Δ_s = ½(ðð̄ + ð̄ð)`, eigenvalue `−[ℓ(ℓ+1)−s²]`.
-- **SH normalization:** orthonormal, Condon–Shortley phase included; asserted in
-  tests.
+- The codec decodes from a **base sphere** carrying the mesh's own connectivity.
+  `codec.base_sphere` produces it (cMCF or Willmore flow) and Möbius-normalizes
+  it against the mesh's conformal density.
+- Möbius normalization kills the ℓ=1 freedom; the unit-sphere projection kills
+  ℓ=0 scale. **Rotation is not fixed by anything** and remains an open gauge —
+  two shapes differing by a rotation encode to different ρ̂. See
+  `SIMPLIFICATION_PLAN.md` §7.
+- ρ̂ is meaningless without its base sphere; `EncodeResult` carries both.
 
-## Coefficient layout
+## Real spherical harmonics
 
-- Dense complex array `C[ℓ, ℓ+m]` of shape `(L+1, 2L+1)`, for ℓ ∈ [0..L],
-  m ∈ [−ℓ..ℓ] (column index `ℓ+m` ∈ [0, 2ℓ]). Unused entries are zero.
-- Grid: Gauss–Legendre in θ (`Nθ = L+1` nodes in `x=cosθ`), equiangular in φ
-  (`Nφ = 2L+1`). This makes `analy∘synth = id` for band-limited spin fields (the
-  relevant products are degree-≤2L polynomials in cosθ): ~1e-12 at L=16. The
-  factorial sum loses accuracy past L≈24 — switch to a recursive backend
-  (e.g. `s2fft`) if much higher bandlimits are ever needed.
-
-## State algebra
-
-- σ spin-0; Hopf `q = ð²σ` spin-2 ⟹
-  `q̂_{ℓm} = √((ℓ−1)ℓ(ℓ+1)(ℓ+2)) · σ̂_{ℓm}`; cross-field representative spin-4.
-
-## Linearization (radius R)
-
-- `σ̂_{ℓm} = (2R²/(ℓ(ℓ+1))) ρ̇_{ℓm}`; mean-curvature response multiplier
-  `m_ℓ = (ℓ−1)(ℓ+2)/(ℓ(ℓ+1))`. Used only to *initialize* ρ for the Dirac decode;
-  iterate to exactness.
-
-## Gauge fix
-
-- Drop ℓ≤1 (ℓ=0 scale, ℓ=1 translation/Möbius). State lives in ℓ≥2; `q=ð²σ`
-  already annihilates ℓ≤1.
-
-## Willmore & structure equations
-
-- `W = ∫H²dA ≥ 4π`; `W − 4π = ¼∫(κ₁−κ₂)²dA = ‖q‖²`. Forward blur rate
-  `κ_ℓ = (ℓ−1)ℓ(ℓ+1)(ℓ+2)`.
-- Metric `e^{2u}|dz|²`. Physics-prior residuals: Gauss
-  `−Δ₀u = e^{2u}H² − e^{−2u}|q|²`; Codazzi `∂_z̄ q = ½ e^{2u} ∂_z H`.
+- Real orthonormal basis, ordered ℓ ascending and m ∈ [−ℓ, ℓ], so the first
+  `(L'+1)²` columns *are* the bandwidth-L' basis. Slicing that way is relied on
+  throughout; asserted in `tests/test_encode.py`.
 
 ## Precision split (M3 / MPS)
 

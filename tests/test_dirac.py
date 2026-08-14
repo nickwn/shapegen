@@ -251,21 +251,3 @@ def _integrate_target_edges(V, F, Vtarget):
 # --------------------------------------------------------------------------- #
 # Decode smoke test: a small σ̂ -> finite-W, genus-0 mesh                      #
 # --------------------------------------------------------------------------- #
-
-def test_reconstruct_smoke():
-    from bottlegen.spectral import swsh
-    base = icosphere(3)
-    L = 8
-    sigma = swsh.empty_coeffs(L)
-    sigma[2, 2 + 0] = 0.05            # a single low-ℓ, real (Hermitian-safe) mode
-    sigma[2, 2 - 0] = 0.05
-    V, F = dirac.reconstruct(base.vertices, base.faces, sigma)
-    assert np.isfinite(V).all()
-    # genus unchanged (same connectivity), finite Willmore energy
-    H, _, _ = mean_curvature(V, F)
-    A = vertex_areas(V, F)
-    W = float((H**2 * A).sum())
-    print(f"[reconstruct smoke] W={W:.3f} (sphere=4π≈{4*np.pi:.3f})")
-    assert np.isfinite(W) and W > 0
-    # the shape actually moved away from the round sphere
-    assert np.std(np.linalg.norm(V, axis=1)) > 1e-4

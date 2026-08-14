@@ -1,6 +1,5 @@
 """Quaternionic Dirac operator and the discrete spin transform — the decode
-engine that turns a curvature change ``ρ`` (and hence ``σ̂``) into a new
-genus-0 immersion, including non-star-shaped shapes a radial graph cannot
+engine that turns a curvature change ``ρ`` into a new genus-0 immersion, including non-star-shaped shapes a radial graph cannot
 represent.
 
 Construction (Crane–Pinkall–Schröder, *Spin Transformations of Discrete
@@ -57,7 +56,6 @@ __all__ = [
     "apply_dirac", "dirac_grad_rho", "rho_from_lambda", "dirac_residual",
     "spin_transform", "transformed_edges", "integrate_edges",
     "integrate_transformed_edges",
-    "rho_from_sigma_linear", "reconstruct",
 ]
 
 
@@ -357,89 +355,3 @@ def _poisson_solve(L, b):
     for c in range(b.shape[1]):
         x[keep, c] = solve(b[keep, c])
     return x
-
-
-# --------------------------------------------------------------------------- #
-# σ̂ -> mesh
-# --------------------------------------------------------------------------- #
-
-def sigma_to_rhodot_mult(l):
-    """Per-degree multiplier from the Hopf potential ``σ̂`` to the Dirac
-    curvature drive: ``ρ_{ℓm} = −ℓ(ℓ+1) σ̂_{ℓm}``.
-
-    Now *derived*, not fitted. A radial perturbation ``r = 1 + ĥ Y_{ℓm}`` has
-    ``σ̂ = −½ĥ`` (degree-independent, measured) and geometric curvature change
-    ``ρ = ½ℓ(ℓ+1)ĥ``, hence ``−ℓ(ℓ+1)``.
-
-    The old value ``−(ℓ(ℓ+1))²`` was calibrated against the mass-coupled
-    operator, whose ``ρ`` was off by a factor of the Laplacian ``ℓ(ℓ+1)``; with
-    :func:`dirac_operator` fixed, ``ρ`` is the true mean-curvature half-density
-    change. Prefer :func:`rho_from_lambda` over this linearization wherever an
-    actual mesh is available — it is exact rather than near-sphere.
-    """
-    return -(l * (l + 1.0))
-
-
-def _synth_perdeg(coeffs, theta, phi, mult):
-    """Evaluate ``Σ_{ℓ≥2,m} mult(ℓ) coeffs_{ℓm} Y_{ℓm}(θ,φ)`` (real)."""
-    from scipy.special import sph_harm_y
-    Lmax = coeffs.shape[0] - 1
-    out = np.zeros(theta.shape[0])
-    for l in range(2, Lmax + 1):
-        fac = mult(l)
-        for m in range(-l, l + 1):
-            c = coeffs[l, l + m]
-            if c == 0:
-                continue
-            out += np.real(fac * c * sph_harm_y(l, m, theta, phi))
-    return out
-
-
-def _sphere_angles(V0):
-    r = np.linalg.norm(V0, axis=1)
-    theta = np.arccos(np.clip(V0[:, 2] / r, -1.0, 1.0))
-    phi = np.arctan2(V0[:, 1], V0[:, 0])
-    return theta, phi
-
-
-def rho_from_sigma_linear(sigma_hat, V0):
-    """Initialize the per-vertex change-of-curvature ``ρ`` from ``σ̂`` via the
-    calibrated linearization ``ρ̇_{ℓm} = −(ℓ(ℓ+1))² σ̂_{ℓm}`` evaluated at the
-    base-sphere vertices ``V0`` (R=1)."""
-    theta, phi = _sphere_angles(V0)
-    return _synth_perdeg(sigma_hat, theta, phi, sigma_to_rhodot_mult)
-
-
-def reconstruct(base_V, base_F, sigma_hat, encode=None, iters=4, sigma=1e-6,
-                damp=0.3):
-    """Decode ``σ̂`` into a mesh on the base-sphere connectivity. ``ρ`` is
-    initialized from ``σ̂`` via the calibrated linearization and, if an
-    ``encode`` callable is supplied (``mesh → σ̂``, Session 4), refined by a
-    *damped* residual loop so ``encode(decode(σ̂)) ≈ σ̂``.
-
-    The damping (``damp`` ∈ (0,1]) keeps the loop a contraction: the residual
-    drive ``−(ℓ(ℓ+1))² · res`` amplifies high-ℓ error, so an undamped step can
-    diverge. The best decode is kept (lowest spectral residual). Returns
-    ``(V, F)``.
-    """
-    theta, phi = _sphere_angles(base_V)
-    rho = rho_from_sigma_linear(sigma_hat, base_V)
-    lam, _ = spin_transform(base_V, base_F, rho, sigma=sigma)
-    V = integrate_edges(base_V, base_F, lam)
-    if encode is None:
-        return V, base_F
-
-    best_V, best_err = V, _spec_err(sigma_hat, encode(V, base_F))
-    for _ in range(iters - 1):
-        res = sigma_hat - encode(V, base_F)
-        rho = rho + damp * _synth_perdeg(res, theta, phi, sigma_to_rhodot_mult)
-        lam, _ = spin_transform(base_V, base_F, rho, sigma=sigma)
-        V = integrate_edges(base_V, base_F, lam)
-        err = _spec_err(sigma_hat, encode(V, base_F))
-        if err < best_err:
-            best_V, best_err = V, err
-    return best_V, base_F
-
-
-def _spec_err(target, got):
-    return float(np.linalg.norm(got - target) / max(np.linalg.norm(target), 1e-30))

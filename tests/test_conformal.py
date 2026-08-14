@@ -1,26 +1,17 @@
-"""Session 4 acceptance tests: spherical conformal param + Möbius normalization.
+"""Acceptance tests for the base-sphere parameterisation.
 
-Maps to Appendix B rows 5 & 6:
-  5. encode∘decode ≈ id on σ̂                       small
-  6. Möbius gauge invariance of σ̂                  small
-
-Plus the make-or-break rotation gauge: the encode is *exactly* rotation
-equivariant (σ̂ of a rotated mesh = the Wigner-D image of σ̂), because cMCF, the
-conformal Hopf field, and the least-squares SHT are all rotation covariant on
-the identical (rotated) discrete mesh.
+Covers what the ρ codec needs from ``conformal.py``: cMCF reaches a sphere
+and reduces conformal distortion, and the Möbius gauge fix actually centers
+the conformal barycenter. The σ̂ route this file used to cover went with the
+σ̂ stack.
 """
 
 import numpy as np
 import pytest
-import quaternionic
-import spherical
-from scipy.spatial import cKDTree
 
 from bottlegen.geom import conformal as cf
-from bottlegen.geom import dirac
 from bottlegen.geom.mesh import Mesh, ellipsoid, icosphere
 from bottlegen.geom.operators import vertex_areas
-from bottlegen.spectral import swsh
 
 
 def bumpy(sub=4):
@@ -93,69 +84,6 @@ def test_cmcf_conformal_distortion_decreases():
 # Round / Möbius sphere -> σ̂ ≈ 0                                              #
 # --------------------------------------------------------------------------- #
 
-def test_round_sphere_sigma_zero():
-    sig = cf.mesh_to_sigma(icosphere(4), L=8)
-    assert np.max(np.abs(sig)) < 2e-3
-
-
-def test_mobius_sphere_sigma_zero():
-    s = icosphere(4)
-    Vm = cf.ball_automorphism(s.vertices, np.array([0.0, 0.0, 0.3]))
-    sig = cf.mesh_to_sigma(Mesh(Vm, s.faces), L=8)
-    assert np.max(np.abs(sig)) < 5e-3
-
-
-# --------------------------------------------------------------------------- #
-# Test (make-or-break): rotation equivariance via the Wigner-D oracle          #
-# --------------------------------------------------------------------------- #
-
-def test_rotation_equivariance_exact():
-    L = 10
-    m = bumpy(4)
-    R = rot([0.3, -0.7, 0.6], 1.1)
-    sig = cf.mesh_to_sigma(m, L=L)
-    sigR = cf.mesh_to_sigma(Mesh(m.vertices @ R.T, m.faces), L=L)
-    sigD = wigner_rotate(sig, R, L)
-    rel = np.linalg.norm(sigR - sigD) / np.linalg.norm(sig)
-    print(f"[rotation equivariance] rel err = {rel:.2e}")
-    assert rel < 1e-9                            # exact on the identical mesh
-
-
-def test_rotation_perdegree_norm_invariant():
-    L = 10
-    m = bumpy(4)
-    R = rot([1.0, 0.2, -0.5], 0.9)
-    sig = cf.mesh_to_sigma(m, L=L)
-    sigR = cf.mesh_to_sigma(Mesh(m.vertices @ R.T, m.faces), L=L)
-    for l in range(2, L + 1):
-        assert abs(np.linalg.norm(sig[l]) - np.linalg.norm(sigR[l])) < 1e-8
-
-
-# --------------------------------------------------------------------------- #
-# Test 6: Möbius gauge invariance of σ̂                                        #
-# --------------------------------------------------------------------------- #
-
-def test_mobius_gauge_invariance():
-    L = 12
-    m = bumpy(4)
-    sph = cf.spherical_conformal_map(m)
-
-    def sig_from(sphp):
-        q, th, ph, ar = cf.hopf_on_sphere(m, cf.mobius_normalize(m, sphp))
-        qh = swsh.fit_coeffs(2, L, th, ph, q, weights=ar)
-        sc = swsh.hopf_scaling(L)
-        sg = swsh.empty_coeffs(L)
-        for l in range(2, L + 1):
-            sg[l] = qh[l] / sc[l]
-        return cf.gauge_fix(sg)
-
-    sig0 = sig_from(sph)
-    sigA = sig_from(cf.ball_automorphism(sph, np.array([0.18, -0.1, 0.05])))
-    rel = np.linalg.norm(sigA - sig0) / np.linalg.norm(sig0)
-    print(f"[möbius gauge] σ̂ rel diff = {rel:.4f}")
-    assert rel < 2e-2
-
-
 def test_mobius_normalize_centers_barycenter():
     m = bumpy(4)
     sph = cf.spherical_conformal_map(m)
@@ -169,36 +97,3 @@ def test_mobius_normalize_centers_barycenter():
 # Test 5: encode∘decode ≈ id (approximate inverse; the hard cross-session one) #
 # --------------------------------------------------------------------------- #
 
-def test_encode_decode_roundtrip():
-    L = 10
-    m = bumpy(4)
-    sig = cf.mesh_to_sigma(m, L=L)
-    base = icosphere(4)
-    V, F = dirac.reconstruct(base.vertices, base.faces, sig)   # linear init
-    sig2 = cf.mesh_to_sigma(Mesh(V, F), L=L)
-    spec = np.linalg.norm(sig2 - sig) / np.linalg.norm(sig)
-    print(f"[encode∘decode] spectral rel err = {spec:.3f}")
-    assert spec < 0.45
-    # the decoded shape is non-trivial and the right amplitude band
-    rstd = np.std(np.linalg.norm(V - V.mean(0), axis=1))
-    assert 0.3 < rstd / np.std(np.linalg.norm(m.vertices - m.vertices.mean(0),
-                                              axis=1)) < 3.0
-
-
-def test_decode_chamfer_matches_source():
-    L = 10
-    m = bumpy(4)
-    sig = cf.mesh_to_sigma(m, L=L)
-    base = icosphere(4)
-    V, _ = dirac.reconstruct(base.vertices, base.faces, sig)
-    # similarity-align decode to source, then Chamfer
-    X0 = V - V.mean(0)
-    Y0 = m.vertices - m.vertices.mean(0)
-    U, S, Vt = np.linalg.svd(X0.T @ Y0)
-    Va = (S.sum() / (X0 ** 2).sum()) * (X0 @ (U @ Vt))
-    da, _ = cKDTree(Y0).query(Va)
-    db, _ = cKDTree(Va).query(Y0)
-    chamfer = 0.5 * (da.mean() + db.mean())
-    feat = np.std(np.linalg.norm(Y0, axis=1))
-    print(f"[decode chamfer] {chamfer:.4f} (feature scale {feat:.4f})")
-    assert chamfer < feat
