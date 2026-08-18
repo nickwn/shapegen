@@ -28,8 +28,8 @@ import numpy as np
 from .geom import conformal as _cf
 from .geom import encode as _enc
 
-__all__ = ["EncodeResult", "base_sphere", "encode", "decode", "shape_error",
-           "n_coeffs", "band_index", "encode_dataset"]
+__all__ = ["EncodeResult", "template_sphere", "base_sphere", "encode",
+           "decode", "shape_error", "n_coeffs", "band_index", "encode_dataset"]
 
 n_coeffs = _enc.n_coeffs
 band_index = _enc.band_index
@@ -56,13 +56,42 @@ class EncodeResult:
 
     @property
     def converged(self) -> bool:
-        """False when the optimiser ran out of budget rather than converging."""
+        """False when the optimiser ran out of budget rather than converging.
+
+        A ``local`` encode is not an optimisation, so it reports True — there was
+        no budget to exhaust. Read it as "this is the answer this method gives",
+        not as "this is optimal".
+        """
         return "LIMIT" not in self.status
 
     def __repr__(self):
         flag = "" if self.converged else "  [ITERATION-CAPPED]"
         return (f"EncodeResult(L={self.L}, err={self.err:.5f}, "
                 f"niter={self.niter}, |g|={self.gnorm:.1e}){flag}")
+
+
+def template_sphere(subdiv: int = 3) -> np.ndarray:
+    """The canonical base sphere: ONE sphere shared by an entire dataset.
+
+    Use this, not :func:`base_sphere`, whenever codes must be comparable — which
+    is always, for generative modelling. The reason is not convenience:
+
+    ρ̂ is defined *relative to* a base sphere. ``ρ = H·e^u − 1`` where ``e^u`` is
+    the conformal factor of the map from that sphere, so changing the sphere
+    changes ρ even for an identical surface. Codes encoded against per-shape cMCF
+    spheres therefore do not share a meaning, and decoding one against a different
+    sphere gives a measurably different shape (chamfer 0.047 vs 0.007). At
+    generation time there is no mesh, hence no cMCF sphere to recover — so the
+    sphere must be fixed in advance, and encoding must use the same one.
+
+    The cost is a reconstruction floor of roughly 4.4% instead of cMCF's 1.3%,
+    flat in resolution because it is *correspondence* error, not discretisation:
+    the identity map from template to shape carries ~6.6% quasi-conformal shear
+    that the spin transform structurally cannot express.
+    """
+    from .geom.mesh import icosphere  # noqa: PLC0415
+    V = icosphere(subdiv).vertices
+    return V / np.linalg.norm(V, axis=1, keepdims=True)
 
 
 def base_sphere(mesh, method: str = "cmcf", **kw) -> np.ndarray:
@@ -93,8 +122,25 @@ def base_sphere(mesh, method: str = "cmcf", **kw) -> np.ndarray:
     raise ValueError(f"unknown method {method!r} (expected 'cmcf' or 'willmore')")
 
 
-def encode(mesh, L: int, sphere=None, maxiter: int = 200, **kw) -> EncodeResult:
-    """``mesh → ρ̂ ∈ ℝ^((L+1)²)`` by optimising decoded shape error.
+def encode(mesh, L: int, sphere=None, maxiter: int = 200,
+           method: str = "adjoint", **kw) -> EncodeResult:
+    """``mesh → ρ̂ ∈ ℝ^((L+1)²)``.
+
+    ``method="adjoint"`` (default) optimises decoded shape error through the
+    adjoint. ``method="local"`` returns the direct geometric measurement instead
+    — roughly 2× less accurate, but far more comparable across meshes, because a
+    measurement of a continuum quantity converges under refinement while a fit
+    absorbs the discretisation it was fitted against.
+
+    Same surface, two triangulations, per-band coefficient difference::
+
+        L          local     adjoint
+        4           7.7%        7.4%
+        8           8.9%       28.3%
+        12         12.4%       46.0%
+
+    Use ``local`` when codes must be comparable across meshes or resolutions;
+    ``adjoint`` when reconstruction on a *fixed* discretisation is what matters.
 
     Computes a base sphere if none is given; pass one when encoding the same mesh
     at several bandwidths, since the parameterisation is the expensive step.
@@ -103,7 +149,10 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200, **kw) -> EncodeResult:
     decode is nonlinear, so the band-limited optimum is not the projection of the
     unconstrained one, and the difference grows as L falls.
     """
-    o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter, **kw)
+    if method not in ("adjoint", "local"):
+        raise ValueError(f"method must be 'adjoint' or 'local', got {method!r}")
+    o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter,
+                       optimise=(method == "adjoint"), **kw)
     return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
                         err0=o["err0"], niter=o["niter"], nfev=o["nfev"],
                         gnorm=o["gnorm"], status=o.get("status", ""),
@@ -129,23 +178,39 @@ def shape_error(target: np.ndarray, X: np.ndarray) -> float:
     return float(np.sqrt(_enc.procrustes(target, X)[0]))
 
 
-def encode_dataset(meshes, L: int, maxiter: int = 200, n_jobs: int = 1,
-                   verbose: bool = False):
-    """Encode many meshes; returns ``(coeffs (N,K), results)``.
+def encode_dataset(meshes, L: int, sphere=None, maxiter: int = 200,
+                   n_jobs: int = 1, verbose: bool = False):
+    """Encode many meshes against **one shared sphere**; returns ``(coeffs, results)``.
 
-    Encoding is ~2.5 min/mesh at subdiv 3 / L=12 and is embarrassingly parallel
-    across meshes — this is the place to parallelise. ``n_jobs > 1`` needs a
-    process pool (the work is NumPy/SciPy-bound, so threads will not help);
-    left as a hook rather than a guess at your scheduler.
+    ``sphere`` defaults to :func:`template_sphere` sized to the meshes. Passing
+    per-shape spheres here would defeat the purpose — see that function for why
+    the codes would then not share a meaning.
+
+    Encoding is ~26 s/mesh at subdiv 3 / L=12 and is embarrassingly parallel
+    across meshes. ``n_jobs > 1`` needs a process pool (the work is NumPy/SciPy
+    bound, so threads will not help); left as a hook rather than a guess at your
+    scheduler.
     """
     if n_jobs != 1:
         raise NotImplementedError(
             "parallel encoding is a deliberate hook, not an omission: use a "
             "process pool over `encode` and pick the executor to suit your "
             "environment.")
+    meshes = list(meshes)
+    if sphere is None:
+        n = len(meshes[0].vertices)
+        for sub in range(1, 8):                       # match the vertex count
+            t = template_sphere(sub)
+            if len(t) == n:
+                sphere = t
+                break
+        else:
+            raise ValueError(
+                f"no icosphere has {n} vertices; pass `sphere` explicitly, or "
+                f"remesh the inputs onto a template first")
     out = []
     for i, m in enumerate(meshes):
-        r = encode(m, L, maxiter=maxiter)
+        r = encode(m, L, sphere=sphere, maxiter=maxiter)
         if verbose:
             print(f"[{i + 1}/{len(meshes)}] {r}", flush=True)
         out.append(r)

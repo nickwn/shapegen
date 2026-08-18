@@ -260,7 +260,8 @@ def decode_sh(coeffs: np.ndarray, sph: np.ndarray, F: np.ndarray,
 
 def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
               rho0=None, cmcf_iters: int = 300, verbose: bool = False,
-              alpha: float = 0.75, maxcor: int = 40, precond=None):
+              alpha: float = 0.75, maxcor: int = 40, precond=None,
+              optimise: bool = True):
     """Encode ``mesh`` as ``(L+1)²`` real SH coefficients of ρ.
 
     ``sph`` is the cMCF sphere parameterisation (computed if absent — it is the
@@ -324,6 +325,18 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
     # Evaluate the start point explicitly: needed both to report err0 and to
     # guarantee below that we never return something worse than we were given.
     J0, g0 = fg(u0)
+
+    if not optimise:
+        # The local encoder: report the initialiser as the answer. niter=0 is
+        # honest here rather than a stalled optimiser, and `status` says so, so
+        # the convergence flag downstream does not misread it as budget-limited.
+        return {"coeffs": c0, "rho": Yl @ c0, "sph": sph, "L": L, "alpha": alpha,
+                "err": float(np.sqrt(max(J0, 0.0))),
+                "err0": float(np.sqrt(max(J0, 0.0))),
+                "nfev": 1, "niter": 0,
+                "gnorm0": float(np.abs(g0 / d).max()),
+                "gnorm": float(np.abs(g0 / d).max()),
+                "status": "LOCAL: geometric measurement, not optimised"}
     # ``J`` is a *normalised* squared error, so it and its gradient are numerically
     # tiny (J ~ 3e-5 at a 0.6% shape error). L-BFGS-B's default pgtol of 1e-5 is
     # then already satisfied at the starting point and it returns with nit=0
