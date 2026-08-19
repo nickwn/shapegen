@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from bottlegen.geom import encode as enc
+from bottlegen.geom import spin
 from bottlegen.geom.mesh import icosphere
 from bottlegen.geom.operators import vertex_areas
 
@@ -174,3 +175,38 @@ def test_precond_reaches_lower_error_in_a_fixed_budget():
     print(f"[precond L=16, 25 iters] plain={plain['err']:.4f}  "
           f"precond={prec['err']:.4f}  ({plain['err'] / prec['err']:.2f}x)")
     assert prec["err"] < 0.8 * plain["err"]
+
+
+def test_direct_encoder_is_exact_on_spheres():
+    """``ρ = H·e^u − 1`` must vanish on a sphere at any radius: H = 1/R and
+    e^u = R, so the product is 1 and ρ is 0.
+
+    The *median* is the convergence quantity, not the max — an icosphere's 12
+    valence-5 vertices are a fixed tessellation artifact whose curvature error
+    does not shrink (exactly 12 vertices exceed 0.05 at every resolution).
+    """
+    from bottlegen.geom.mesh import Mesh, icosphere
+    prev = None
+    for sub in (2, 3, 4):
+        m = icosphere(sub)
+        S = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
+        for R in (1.0, 2.5):                     # scale-invariant by construction
+            rho = spin.mesh_to_rho_direct(Mesh(S * R, m.faces), S)
+            assert int((np.abs(rho) > 0.05).sum()) == 12
+        med = float(np.median(np.abs(rho)))
+        if prev is not None:
+            assert med < prev / 2.0              # O(h^2) under refinement
+        prev = med
+    assert prev < 1e-3
+
+
+def test_direct_beats_lambda_on_a_bottle():
+    """The reason `direct` is the default. Same parameterisation, same cost."""
+    from bottlegen.data.dataset import demo_bottle_meshes
+    from bottlegen import codec
+    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
+    S = codec.base_sphere(mesh, method="cmcf")
+    d = codec.encode(mesh, L=12, sphere=S, method="direct")
+    l = codec.encode(mesh, L=12, sphere=S, method="lambda")
+    print(f"[direct vs lambda] {d.err:.5f} vs {l.err:.5f}")
+    assert d.err < l.err

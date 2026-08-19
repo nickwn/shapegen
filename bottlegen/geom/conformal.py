@@ -25,12 +25,14 @@ largely compensated — the round trip lands well below the qc figure.
 from __future__ import annotations
 
 import numpy as np
+import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from .mesh import Mesh
 from .operators import cotan_laplacian, vertex_areas, vertex_normals
 
-__all__ = ["spherical_conformal_map", "mobius_normalize", "ball_automorphism"]
+__all__ = ["spherical_conformal_map", "mobius_normalize", "ball_automorphism",
+           "u_edge_lsq", "harmonic_energy", "guyau", "conformal_param"]
 
 
 # --------------------------------------------------------------------------- #
@@ -116,3 +118,122 @@ def mobius_normalize(mesh: Mesh, sph: np.ndarray, iters: int = 100,
 # --------------------------------------------------------------------------- #
 # mesh -> σ̂
 # --------------------------------------------------------------------------- #
+
+
+def u_edge_lsq(S: np.ndarray, B: np.ndarray, E: np.ndarray):
+    """Log conformal factor ``u`` of the map ``S → B``, by edge least squares.
+
+    Ported from ``rho_codec_pkg`` (rt/param/ufactor.py). For a conformal map every
+    edge scales by the local factor, so
+
+        (u_i + u_j)/2 = log( |B_j − B_i| / |S_j − S_i| )
+
+    is one equation per edge — overdetermined, and solved by LSQR. Uniquely
+    solvable because triangles are odd cycles, which kills the alternating
+    null space a bipartite graph would have.
+
+    This is far better than the lumped-area estimate ``e^u = √(a_B/a_S)``: it is
+    exact to ~7e-14 on genuinely conformal input, where the area ratio carries the
+    full O(h²) error of the mass lumping. ``ρ = H·e^u − 1`` inherits that error
+    directly, so it is a first-order term for the direct encoder.
+
+    Returns ``(u, residual_norm)``. The residual is a useful diagnostic on its own:
+    it measures how far the correspondence is from conformal, so a large value
+    means the map has shear the spin transform cannot express.
+    """
+    l0 = np.linalg.norm(S[E[:, 1]] - S[E[:, 0]], axis=1)
+    l1 = np.linalg.norm(B[E[:, 1]] - B[E[:, 0]], axis=1)
+    m, N = len(E), len(S)
+    A = sp.coo_matrix((np.full(2 * m, 0.5),
+                       (np.repeat(np.arange(m), 2), E.ravel())),
+                      shape=(m, N)).tocsr()
+    out = spla.lsqr(A, np.log(np.maximum(l1, 1e-300) / np.maximum(l0, 1e-300)),
+                    atol=1e-14, btol=1e-14, iter_lim=8000)
+    return out[0], float(out[3])
+
+
+def harmonic_energy(P: np.ndarray, L) -> float:
+    """Dirichlet energy ``½ tr(Pᵀ L P)`` of a sphere map, under the *source* cotan
+    Laplacian. The harmonic map minimises it; a collapsed map drives it to zero,
+    which is the failure mode :func:`guyau` guards against."""
+    return float(0.5 * np.einsum("ij,ij->", P, L @ P))
+
+
+def guyau(mesh: Mesh, sph: np.ndarray, iters: int = 2000, omega: float = 0.5,
+          recenter_every: int = 10, tol: float = 1e-13, verbose: bool = False):
+    """Gu–Yau relaxation: polish a cMCF sphere into the true harmonic map.
+
+    Ported from ``rho_codec_pkg`` (rt/param/cmcf.py). cMCF lands *near* the
+    conformal map; this converges to it. The local update
+
+        φ_i ← normalise( Σ_j w_ij φ_j / Σ_j w_ij )
+
+    minimises Dirichlet energy over ``φ_i`` on S², and Möbius re-centring against
+    the *source* measure keeps the flow off the constant map — otherwise the
+    global minimiser.
+
+    Measured on bottles: quasi-conformal distortion improves ~22%, 0.0194 → 0.0149
+    at subdiv 3 and 0.0097 → 0.0076 at subdiv 4. Note the energy barely moves
+    (12.5554 → 12.5549) while qc improves a fifth, so **energy is a poor progress
+    signal here** — judge the parameterisation by qc.
+
+    **Two traps, both measured.**
+
+    *Undamped Jacobi overshoots.* This updates every vertex simultaneously;
+    per-vertex minimisation is monotone under Gauss–Seidel, not under Jacobi.
+    At ``omega=1.0`` (the reference's default) it improves for 66 sweeps at subdiv
+    4 and then runs away — unguarded it reached E=340 and qc=0.68, returning a
+    sphere that still *looks* like a sphere and is a ruined parameterisation.
+    ``omega=0.5`` is stable and reaches a better optimum.
+
+    *Do not clamp negative cotan weights.* Obtuse triangles give ``w_ij < 0``
+    (1.67% of edges at subdiv 3, 2.16% at subdiv 4) and clamping them looks like
+    the textbook fix for the overshoot. It is not: clamped, the energy never
+    decreases at all — 0 improving sweeps at either resolution — and guyau becomes
+    a no-op. The negative weights carry real geometry.
+
+    The best-iterate guard is what makes this safe: divergence is silent, so the
+    routine keeps the lowest-energy sphere it saw rather than whatever the last
+    sweep produced.
+
+    Sign convention: ``cotan_laplacian`` returns ``L = D − W`` (PSD), so the
+    off-diagonal block is ``−W``; the ratio in the update cancels the sign.
+    """
+    L, _ = cotan_laplacian(mesh.vertices, mesh.faces)
+    Loff = L - sp.diags(L.diagonal())
+    den = np.asarray(Loff.sum(axis=1)).ravel()
+    den = np.where(np.abs(den) < 1e-300, -1e-300, den)
+
+    unit = lambda P: P / np.linalg.norm(P, axis=1, keepdims=True)
+    P = unit(np.asarray(sph, dtype=float))
+    best = (harmonic_energy(P, L), P.copy())
+    prev = best[0]
+    for it in range(iters):
+        Q = unit((Loff @ P) / den[:, None])
+        P = unit((1.0 - omega) * P + omega * Q)
+        if (it + 1) % recenter_every == 0:
+            P = mobius_normalize(mesh, P)
+        E = harmonic_energy(P, L)
+        if not np.isfinite(E):
+            break
+        if E < best[0]:
+            best = (E, P.copy())
+        if it > 50 and abs(E - prev) < tol * max(1.0, abs(E)):
+            break
+        prev = E
+    P = mobius_normalize(mesh, best[1])
+    if verbose:
+        print(f"  guyau: E {harmonic_energy(unit(np.asarray(sph, float)), L):.6f} "
+              f"-> {best[0]:.6f} in {it + 1} sweeps")
+    return P
+
+
+def conformal_param(mesh: Mesh, cmcf_iters: int = 300, **kw) -> np.ndarray:
+    """The full parameterisation: cMCF → Möbius centring → Gu–Yau polish.
+
+    This is the three-stage pipeline ``rho_codec_pkg`` uses in production, where
+    shapegen historically stopped after two. Everything downstream — ρ, the
+    decode, the encoder's floor — inherits the parameterisation's quality.
+    """
+    S = mobius_normalize(mesh, spherical_conformal_map(mesh, iters=cmcf_iters))
+    return guyau(mesh, S, **kw)

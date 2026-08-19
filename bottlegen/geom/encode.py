@@ -110,19 +110,38 @@ def real_sh_basis(V: np.ndarray, L: int) -> np.ndarray:
     return np.column_stack(cols)
 
 
-def sh_project(rho: np.ndarray, Y: np.ndarray) -> np.ndarray:
-    """Least-squares SH coefficients of a per-vertex field. ``Y`` is the basis.
+def sh_project(rho: np.ndarray, Y: np.ndarray, mass: np.ndarray | None = None):
+    """SH coefficients of a per-vertex field on the sphere.
 
-    Least squares rather than quadrature (``Yᵀ diag(area) rho``) on purpose: the
-    mesh's lumped-area quadrature is only ~4e-3 accurate on an icosphere, which
-    would put a systematic error into the initialiser and, worse, into the
-    *baseline* curve this is also used to build.
+    With ``mass`` (the sphere's lumped vertex areas) this is a **Galerkin
+    projection in the mesh's own L²** — ported from ``rho_codec_pkg``'s
+    ``MeshBand``::
+
+        f_L = argmin_g  Σ_i M_i (f_i − g_i)²  =  Y (YᵀMY)⁻¹ YᵀM f
+
+    Without it, plain unweighted least squares, which is what shapegen used to do
+    and is **wrong on a cMCF sphere**: vertex density there spans 8.7x at subdiv 3
+    and 11.1x at subdiv 4, so an unweighted fit silently weights the sphere by
+    triangulation rather than by area. Measured on a bottle at subdiv 4, weighting
+    is worth **3.9x at L=8** and helps most exactly where the codec is weakest.
+
+    Do **not** replace this with quadrature on a Gauss-Legendre grid, which is the
+    obvious "more correct" move and is a dead end — tried in both repos, rejected
+    in both. ρ on a bottle concentrates on a cap of angular radius ~0.03 rad while
+    an affordable GL grid (L_quad=72) has 0.043 rad spacing, so the grid cannot
+    resolve ρ at all; ‖ρ‖ measured through it swings 3.64/6.74/5.88/4.67 for
+    L_quad=24/36/48/72 against a mesh truth of 5.90. The conformal mesh grades
+    itself to the geometry — smallest face 0.0014 rad — which is precisely why the
+    mesh's own quadrature is the right one. Galerkin is also insensitive to the
+    Gram error: it is the exact weighted-L² projection whether or not the
+    quadrature is orthonormal.
     """
-    # rcond=None keeps numpy's future-proof default (machine-eps cutoff).  It
-    # matters at high L, where Y's columns approach the mesh's resolution limit
-    # and the system becomes genuinely ill-conditioned -- the small singular
-    # values there are aliasing, not signal, and are better dropped.
-    return np.linalg.lstsq(Y, rho, rcond=None)[0]
+    if mass is None:
+        # rcond=None keeps numpy's future-proof default (machine-eps cutoff).
+        return np.linalg.lstsq(Y, rho, rcond=None)[0]
+    Yw = Y * np.asarray(mass, dtype=float)[:, None]
+    G = Y.T @ Yw
+    return np.linalg.solve(G + 1e-12 * np.eye(G.shape[0]), Yw.T @ rho)
 
 
 # --------------------------------------------------------------------------- #
@@ -261,7 +280,7 @@ def decode_sh(coeffs: np.ndarray, sph: np.ndarray, F: np.ndarray,
 def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
               rho0=None, cmcf_iters: int = 300, verbose: bool = False,
               alpha: float = 0.75, maxcor: int = 40, precond=None,
-              optimise: bool = True):
+              optimise: bool = True, local: str = "direct"):
     """Encode ``mesh`` as ``(L+1)²`` real SH coefficients of ρ.
 
     ``sph`` is the cMCF sphere parameterisation (computed if absent — it is the
@@ -294,8 +313,18 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
     # measured ||rho_opt - rho_0||/||rho_0|| = 0.19.
     if c0 is None:
         if rho0 is None:
-            rho0 = spin.mesh_to_rho(mesh, sph=sph)[0]
-        c0 = sh_project(rho0, Yl)
+            # "direct" (rho = H e^u - 1, read off the geometry) is the default:
+            # measured 20-35% better than the lambda route at every bandwidth and
+            # resolution tried, at the same cost. The gap widens with L because
+            # the lambda route's rho carries least-squares fit noise that extra
+            # bandwidth faithfully reproduces -- it gets WORSE from L=12 to L=24
+            # (0.0439 -> 0.0553 at subdiv 4) where direct barely degrades.
+            rho0 = (spin.mesh_to_rho_direct(mesh, sph) if local == "direct"
+                    else spin.mesh_to_rho(mesh, sph=sph)[0])
+        # Galerkin in the sphere's own L2 -- see sh_project. Unweighted least
+        # squares here costs ~3.9x at low L on a cMCF sphere.
+        from .operators import vertex_areas  # noqa: PLC0415
+        c0 = sh_project(rho0, Yl, mass=vertex_areas(sph, F))
     c0 = np.asarray(c0, dtype=float)
 
     # Optimise in preconditioned variables u, with c = d * u. Pure change of

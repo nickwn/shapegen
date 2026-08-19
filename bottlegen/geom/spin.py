@@ -34,7 +34,7 @@ from .mesh import triangle_areas
 
 __all__ = [
     "rotation_to_quaternion", "face_lambdas", "lambda_from_correspondence",
-    "qc_distortion", "mesh_to_rho",
+    "qc_distortion", "mesh_to_rho", "mesh_to_rho_direct",
 ]
 
 
@@ -171,3 +171,39 @@ def mesh_to_rho(mesh, sph=None, dt=5e-2, iters=200, normalize=True):
             sph = cf.mobius_normalize(mesh, sph)
     lam = lambda_from_correspondence(sph, mesh.vertices, mesh.faces)
     return rho_from_lambda(sph, mesh.faces, lam), sph
+
+
+def mesh_to_rho_direct(mesh, sph, return_diagnostics=False):
+    """The **direct** local encoder: ``ρ = H·e^u − 1``, no spin transform.
+
+    Ported from ``rho_codec_pkg`` (rt/exp/arms.py: ``measure``). Where
+    :func:`mesh_to_rho` reads λ off the correspondence and projects, this reads ρ
+    straight off the geometry:
+
+    * ``H`` — signed mean curvature of the **target** mesh, calibrated so a unit
+      sphere gives ``H = +1`` (``CONVENTIONS.md``: outward normal, convex-positive);
+    * ``e^u`` — the conformal factor of the map ``sph → mesh``, from
+      :func:`~bottlegen.geom.conformal.u_edge_lsq`, which solves
+      ``(u_i+u_j)/2 = log(|B_j−B_i|/|S_j−S_i|)`` over every edge and is exact to
+      3e-16 on conformal input (a lumped area ratio carries the full O(h²) of the
+      mass lumping, and ρ inherits it directly);
+    * the ``−1`` is the base sphere's own ``H·e^u``, making ρ a *change* in
+      mean-curvature half-density.
+
+    ``return_diagnostics`` also yields the LSQR residual of the ``u`` solve, which
+    is a genuine measure of how far the correspondence is from conformal — i.e. of
+    the shear the spin transform structurally cannot express. A large residual
+    means the parameterisation, not the encoder, is the limiting term.
+    """
+    from .conformal import u_edge_lsq  # noqa: PLC0415
+    from .curvature import mean_curvature  # noqa: PLC0415
+    from .operators import edge_cotan_weights  # noqa: PLC0415
+
+    V, F = mesh.vertices, mesh.faces
+    E, _ = edge_cotan_weights(np.asarray(sph, dtype=float), F)
+    u, resid = u_edge_lsq(np.asarray(sph, dtype=float), V, E)
+    H = mean_curvature(V, F)[0]
+    rho = H * np.exp(u) - 1.0
+    if return_diagnostics:
+        return rho, {"u": u, "H": H, "u_resid": resid}
+    return rho

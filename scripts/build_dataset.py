@@ -31,7 +31,7 @@ from bottlegen.data.dataset import demo_bottle_meshes
 from bottlegen.eval.metrics import flip_fraction, genus
 
 
-def validate_samples(coeffs, sphere, faces, n=12, seed=0):
+def validate_samples(coeffs, sphere, faces, n=12, seed=0, radii=None):
     """How far from the data can you sample before the decode stops being valid?
 
     Sampling is restricted to the span the data actually occupies. With N codes in
@@ -51,7 +51,7 @@ def validate_samples(coeffs, sphere, faces, n=12, seed=0):
     rng = np.random.default_rng(seed)
 
     rows = []
-    for rad in (0.5, 1.0, 1.5, 2.0, 3.0):
+    for rad in (radii or (0.5, 1.0, 1.5, 2.0, 3.0)):
         flips = []
         for _ in range(n):
             z = rng.standard_normal(r) * (S[:r] / np.sqrt(N)) * rad
@@ -71,19 +71,37 @@ def main() -> None:
     ap.add_argument("--L", type=int, default=12, help="SH bandwidth of the latent")
     ap.add_argument("--maxiter", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--facescape", type=str, default=None,
+                    help="path to a facescape_trainset_* directory; uses the "
+                         "registered models, hole-filled")
+    ap.add_argument("--expression", type=str, default="1_neutral",
+                    help="which FaceScape expression (single-expression subsets "
+                         "avoid the varying mouth cap)")
+    ap.add_argument("--method", choices=("adjoint", "local"), default="adjoint",
+                    help="adjoint: one shared sphere, ~19 s/mesh, more accurate. "
+                         "local: per-mesh cMCF measurement, ~0.7 s/mesh, codes "
+                         "portable across discretisations")
     ap.add_argument("--out", type=str, default="reports/dataset.npz")
     args = ap.parse_args()
 
-    meshes = demo_bottle_meshes(n=args.n, subdiv=args.subdiv, seed=args.seed)
+    if args.facescape:
+        from bottlegen.data.registered import load_facescape  # noqa: PLC0415
+        meshes = load_facescape(args.facescape, expression=args.expression,
+                                limit=args.n, verbose=True)
+        template = None                     # no icosphere matches; codec derives one
+    else:
+        meshes = demo_bottle_meshes(n=args.n, subdiv=args.subdiv, seed=args.seed)
+        template = codec.template_sphere(args.subdiv)
     faces = meshes[0].faces
-    template = codec.template_sphere(args.subdiv)
     K = codec.n_coeffs(args.L)
-    print(f"{args.n} shapes, subdiv={args.subdiv} ({len(template)} verts), "
-          f"L={args.L} -> {K} coefficients\n")
+    print(f"{len(meshes)} shapes, {len(meshes[0].vertices)} verts, "
+          f"L={args.L} -> {K} coefficients, method={args.method}\n")
 
     t0 = time.perf_counter()
-    coeffs, results = codec.encode_dataset(meshes, args.L, sphere=template,
-                                           maxiter=args.maxiter, verbose=True)
+    coeffs, results, template = codec.encode_dataset(
+        meshes, args.L, method=args.method,
+        sphere=template if args.method == "adjoint" else None,
+        maxiter=args.maxiter, verbose=True)
     dt = time.perf_counter() - t0
 
     errs = np.array([r.err for r in results])
@@ -95,7 +113,13 @@ def main() -> None:
     print(f"  code norms          mean {np.linalg.norm(coeffs, axis=1).mean():.3f}"
           f"  spread {np.linalg.norm(coeffs, axis=1).std():.3f}")
 
-    v = validate_samples(coeffs, template, faces)
+    # Each draw costs a full decode (~4.5 s at 26k vertices), so scale the probe
+    # to the mesh rather than the dataset: 60 decodes is nothing on an icosphere
+    # and four minutes on a face.
+    big = len(meshes[0].vertices) > 5000
+    v = validate_samples(coeffs, template, faces,
+                         n=4 if big else 12,
+                         radii=(0.5, 1.0, 2.0) if big else None)
     print(f"\nsampling profile ({args.n} codes span {v['span']} dims; "
           f"12 draws per radius):")
     print(f"  {'radius':>7} {'flip mean':>10} {'flip max':>9} {'valid':>7}")

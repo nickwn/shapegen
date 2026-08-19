@@ -103,7 +103,33 @@ def test_encode_dataset_shares_one_sphere():
     """Every code in a dataset must be defined against the same sphere, else the
     coefficients do not share a meaning and the model learns noise."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results = codec.encode_dataset(meshes, L=4, maxiter=20)
+    coeffs, results, dec = codec.encode_dataset(meshes, L=4, maxiter=20)
     assert coeffs.shape == (2, codec.n_coeffs(4))
     assert np.array_equal(results[0].sphere, results[1].sphere)
     assert np.array_equal(results[0].sphere, codec.template_sphere(2))
+    assert np.array_equal(dec, codec.template_sphere(2))
+
+
+def test_encode_dataset_local_uses_per_mesh_spheres():
+    """Design A: each mesh is measured on its OWN cMCF sphere, and the decode
+    sphere is returned separately. A shared sphere here would silently turn this
+    into the adjoint's initialiser instead."""
+    meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
+    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="local")
+    assert coeffs.shape == (2, codec.n_coeffs(4))
+    # per-mesh spheres genuinely differ ...
+    assert not np.array_equal(results[0].sphere, results[1].sphere)
+    # ... but the decode sphere is one shared object
+    assert dec.shape == meshes[0].vertices.shape
+    # and the codes decode on it
+    X = codec.decode(coeffs[0], dec, meshes[0].faces)
+    assert np.isfinite(X).all()
+
+
+def test_encode_dataset_local_rejects_a_shared_sphere():
+    """Passing a shared sphere to method='local' is a category error, not a
+    convenience — it would measure every shape against one parameterisation."""
+    meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
+    with pytest.raises(ValueError, match="(?i)own cMCF sphere"):
+        codec.encode_dataset(meshes, L=4, method="local",
+                             sphere=codec.template_sphere(2))
