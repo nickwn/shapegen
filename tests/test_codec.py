@@ -68,18 +68,18 @@ def test_base_sphere_is_gauge_fixed_and_round():
         assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
 
 
-def test_local_and_adjoint_are_both_available_and_differ():
+def test_direct_and_adjoint_are_both_available_and_differ():
     """The two encoders sit at opposite ends of an accuracy / mesh-independence
     trade, so both must be reachable and the adjoint must actually be better on a
     fixed mesh (which is the axis it wins on)."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    loc = codec.encode(mesh, L=8, method="local")
+    loc = codec.encode(mesh, L=8, method="direct")
     adj = codec.encode(mesh, L=8, method="adjoint", maxiter=60, sphere=loc.sphere)
-    print(f"[local] {loc.err:.5f}   [adjoint] {adj.err:.5f}")
+    print(f"[direct] {loc.err:.5f}   [adjoint] {adj.err:.5f}")
     assert adj.err < loc.err
     assert loc.niter == 0                      # a measurement, not an optimisation
     assert loc.coeffs.shape == adj.coeffs.shape
-    # the local result must still decode to what it claims
+    # the direct result must still decode to what it claims
     X = codec.decode(loc.coeffs, loc.sphere, mesh.faces)
     assert codec.shape_error(mesh.vertices, X) == pytest.approx(loc.err, rel=1e-9)
 
@@ -110,12 +110,12 @@ def test_encode_dataset_shares_one_sphere():
     assert np.array_equal(dec, codec.template_sphere(2))
 
 
-def test_encode_dataset_local_uses_per_mesh_spheres():
-    """Design A: each mesh is measured on its OWN cMCF sphere, and the decode
+def test_encode_dataset_direct_uses_per_mesh_spheres():
+    """Each mesh is measured on its OWN cMCF sphere, and the decode
     sphere is returned separately. A shared sphere here would silently turn this
     into the adjoint's initialiser instead."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="local")
+    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="direct")
     assert coeffs.shape == (2, codec.n_coeffs(4))
     # per-mesh spheres genuinely differ ...
     assert not np.array_equal(results[0].sphere, results[1].sphere)
@@ -126,10 +126,10 @@ def test_encode_dataset_local_uses_per_mesh_spheres():
     assert np.isfinite(X).all()
 
 
-def test_encode_dataset_local_rejects_a_shared_sphere():
-    """Passing a shared sphere to method='local' is a category error, not a
+def test_encode_dataset_direct_rejects_a_shared_sphere():
+    """Passing a shared sphere to method='direct' is a category error, not a
     convenience — it would measure every shape against one parameterisation."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
     with pytest.raises(ValueError, match="(?i)own cMCF sphere"):
-        codec.encode_dataset(meshes, L=4, method="local",
+        codec.encode_dataset(meshes, L=4, method="direct",
                              sphere=codec.template_sphere(2))

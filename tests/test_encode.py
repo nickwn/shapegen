@@ -198,15 +198,3 @@ def test_direct_encoder_is_exact_on_spheres():
             assert med < prev / 2.0              # O(h^2) under refinement
         prev = med
     assert prev < 1e-3
-
-
-def test_direct_beats_lambda_on_a_bottle():
-    """The reason `direct` is the default. Same parameterisation, same cost."""
-    from bottlegen.data.dataset import demo_bottle_meshes
-    from bottlegen import codec
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    S = codec.base_sphere(mesh, method="cmcf")
-    d = codec.encode(mesh, L=12, sphere=S, method="direct")
-    l = codec.encode(mesh, L=12, sphere=S, method="lambda")
-    print(f"[direct vs lambda] {d.err:.5f} vs {l.err:.5f}")
-    assert d.err < l.err

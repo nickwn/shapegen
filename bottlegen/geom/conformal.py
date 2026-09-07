@@ -32,7 +32,7 @@ from .mesh import Mesh
 from .operators import cotan_laplacian, vertex_areas, vertex_normals
 
 __all__ = ["spherical_conformal_map", "mobius_normalize", "ball_automorphism",
-           "u_edge_lsq", "harmonic_energy", "guyau", "conformal_param"]
+           "u_edge_lsq", "harmonic_energy", "guyau"]
 
 
 # --------------------------------------------------------------------------- #
@@ -226,14 +226,3 @@ def guyau(mesh: Mesh, sph: np.ndarray, iters: int = 2000, omega: float = 0.5,
         print(f"  guyau: E {harmonic_energy(unit(np.asarray(sph, float)), L):.6f} "
               f"-> {best[0]:.6f} in {it + 1} sweeps")
     return P
-
-
-def conformal_param(mesh: Mesh, cmcf_iters: int = 300, **kw) -> np.ndarray:
-    """The full parameterisation: cMCF → Möbius centring → Gu–Yau polish.
-
-    This is the three-stage pipeline ``rho_codec_pkg`` uses in production, where
-    shapegen historically stopped after two. Everything downstream — ρ, the
-    decode, the encoder's floor — inherits the parameterisation's quality.
-    """
-    S = mobius_normalize(mesh, spherical_conformal_map(mesh, iters=cmcf_iters))
-    return guyau(mesh, S, **kw)

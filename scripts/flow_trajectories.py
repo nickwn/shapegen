@@ -87,7 +87,7 @@ def local_coeffs(traj, S, F, Yl):
     """
     out = []
     for V in traj:
-        rho = spin.mesh_to_rho(Mesh(V, F), sph=S)[0]
+        rho = spin.mesh_to_rho_direct(Mesh(V, F), S)
         out.append(enc.sh_project(rho, Yl))
     return out
 

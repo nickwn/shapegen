@@ -18,8 +18,9 @@ construction rather than by a calibrated multiplier.
 
 The correspondence itself comes from
 :func:`~bottlegen.geom.conformal.spherical_conformal_map` (cMCF). Its
-quasi-conformal distortion — the shear that :func:`face_lambdas` discards — is
-the accuracy floor of the whole round trip; it vanishes under refinement.
+quasi-conformal distortion is the shear that :func:`face_lambdas` discards — but
+it is **not** the accuracy floor of the round trip, and reading it as one is
+measurably wrong in both directions. See :func:`qc_distortion`.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ from .mesh import triangle_areas
 
 __all__ = [
     "rotation_to_quaternion", "face_lambdas", "lambda_from_correspondence",
-    "qc_distortion", "mesh_to_rho", "mesh_to_rho_direct",
+    "qc_distortion", "mesh_to_rho_direct",
 ]
 
 
@@ -141,9 +142,30 @@ def qc_distortion(S, T, F):
     """Area-weighted mean quasi-conformal distortion ``(σ₁−σ₂)/(σ₁+σ₂)`` of the
     per-face map ``S → T`` (0 for an exactly conformal correspondence).
 
-    This is the shear :func:`face_lambdas` throws away, and it bounds the
-    achievable Dirac residual — the diagnostic to reach for when a round trip is
-    less accurate than expected.
+    This is the shear :func:`face_lambdas` throws away. **It is not an accuracy
+    floor and it does not bound the Dirac residual** — an earlier version of this
+    docstring claimed both, and both are false by measurement:
+
+    * *Not a floor.* On a bottle encoded against the shared template, qc is 0.0665
+      while the adjoint encoder reaches 0.0078 — 8.6x **below** it. qc is a
+      pointwise anisotropy average; the reconstruction error is an L² vertex
+      displacement after optimising over all conformal reparameterisations, and by
+      uniformisation that family is every genus-0 surface. The second can be far
+      smaller than the first.
+    * *Not a bound on the Dirac residual.* On a FaceScape mesh qc reads 0.0289 —
+      better than the bottle's template — yet the **least-squares optimal** ρ for
+      that correspondence leaves a Dirac residual of 0.85 (the bottle: 0.10).
+
+    The likely reason for the second is baked into this function: the weights are
+    ``triangle_areas(S, F)``, i.e. **source** area. Wherever the map compresses —
+    exactly where it is worst — the sphere-side triangles are smallest, so the
+    worst regions carry the least weight. On the face above the source/target area
+    ratio spans 2.3e3, so this average is close to blind to the failure.
+
+    Useful for comparing two parameterisations of the *same* mesh, where that bias
+    is shared. Do not use it as a health check, and do not tune a parameterisation
+    on it: :func:`~bottlegen.geom.conformal.guyau` improves qc 22% and makes
+    reconstruction slightly worse.
     """
     def local(V):
         u1, u2, n = _face_frames(V, F)
@@ -157,28 +179,11 @@ def qc_distortion(S, T, F):
     return float((w * ((sv[:, 0] - sv[:, 1]) / (sv[:, 0] + sv[:, 1]))).sum() / w.sum())
 
 
-def mesh_to_rho(mesh, sph=None, dt=5e-2, iters=200, normalize=True):
-    """Encode a genus-0 mesh as per-vertex ``ρ`` on its conformal sphere param.
-
-    Returns ``(rho, sph)``. Pass ``sph`` to reuse an existing parameterization
-    (cMCF is the expensive step). Decode with
-    ``dirac.integrate_edges(sph, F, dirac.spin_transform(sph, F, rho)[0])``.
-    """
-    from . import conformal as cf
-    if sph is None:
-        sph = cf.spherical_conformal_map(mesh, dt=dt, iters=iters)
-        if normalize:
-            sph = cf.mobius_normalize(mesh, sph)
-    lam = lambda_from_correspondence(sph, mesh.vertices, mesh.faces)
-    return rho_from_lambda(sph, mesh.faces, lam), sph
-
-
 def mesh_to_rho_direct(mesh, sph, return_diagnostics=False):
     """The **direct** local encoder: ``ρ = H·e^u − 1``, no spin transform.
 
-    Ported from ``rho_codec_pkg`` (rt/exp/arms.py: ``measure``). Where
-    :func:`mesh_to_rho` reads λ off the correspondence and projects, this reads ρ
-    straight off the geometry:
+    Ported from ``rho_codec_pkg`` (rt/exp/arms.py: ``measure``). Reads ρ straight
+    off the geometry, with no spin transform and nothing to solve:
 
     * ``H`` — signed mean curvature of the **target** mesh, calibrated so a unit
       sphere gives ``H = +1`` (``CONVENTIONS.md``: outward normal, convex-positive);

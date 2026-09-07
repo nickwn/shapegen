@@ -58,7 +58,7 @@ class EncodeResult:
     def converged(self) -> bool:
         """False when the optimiser ran out of budget rather than converging.
 
-        A ``local`` encode is not an optimisation, so it reports True — there was
+        A ``direct`` encode is not an optimisation, so it reports True — there was
         no budget to exhaust. Read it as "this is the answer this method gives",
         not as "this is optimal".
         """
@@ -126,28 +126,28 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
            method: str = "adjoint", **kw) -> EncodeResult:
     """``mesh → ρ̂ ∈ ℝ^((L+1)²)``.
 
-    **Four method names, three encoders** — ``local`` is an alias for ``direct``.
+    Two encoders:
 
     * ``"adjoint"`` (default) — optimises decoded shape error through the adjoint.
       The most accurate and ~26x the cost (19 s/mesh against 0.74 at subdiv 3).
       Its fit absorbs the discretisation it was fitted against, so its codes are
       *not* comparable across meshes: same surface at two triangulations, per-band
       coefficients differ 7.4% at L=4 but 46.0% at L=12.
-    * ``"direct"`` / ``"local"`` — ``ρ = H·e^u − 1`` read straight off the
-      geometry, with ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`.
-      Closed-form, so nothing to converge and no iteration cap to police. A
-      measurement of a continuum quantity, so it converges under refinement and
-      stays comparable across meshes (7.7% → 12.4% over the same range).
-    * ``"lambda"`` — the older local encoder: reads λ off the correspondence and
-      least-squares ρ against the Dirac energy. Kept for comparison only.
-      ``direct`` beats it by 20-35% at every bandwidth and resolution tried, at
-      the same cost, and the gap *widens* with L because λ's ρ carries fit noise
-      that extra bandwidth faithfully reproduces — it degrades from 0.0439 to
-      0.0553 going L=12 → 24 at subdiv 4, where ``direct`` barely moves.
+    * ``"direct"`` — ``ρ = H·e^u − 1`` read straight off the geometry, with
+      ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`. Closed-form, so
+      nothing to converge and no iteration cap to police. A measurement of a
+      continuum quantity, so it converges under refinement and stays comparable
+      across meshes (7.7% → 12.4% over the same range). Note its accuracy is
+      **not monotone in L** — it peaks around L=8-12 and degrades after, because
+      extra bandwidth faithfully reproduces more of a biased local measurement.
 
     Choose on what has to be true: ``adjoint`` for reconstruction accuracy on a
     *fixed* discretisation, ``direct`` for speed and for codes that mean the same
     thing across meshes.
+
+    A third encoder, ``"lambda"`` (read λ off the correspondence, least-squares ρ
+    against the Dirac energy), was removed: ``direct`` beat it by 20-35% at every
+    bandwidth and resolution tried, at the same cost.
 
     A base sphere is computed if none is given; pass one when encoding the same
     mesh at several bandwidths, since the parameterisation is the expensive step.
@@ -156,12 +156,10 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     decode is nonlinear, so the band-limited optimum is not the projection of the
     unconstrained one, and the difference grows as L falls.
     """
-    if method not in ("adjoint", "local", "direct", "lambda"):
-        raise ValueError(f"method must be 'adjoint', 'local', 'direct' or "
-                         f"'lambda', got {method!r}")
+    if method not in ("adjoint", "direct"):
+        raise ValueError(f"method must be 'adjoint' or 'direct', got {method!r}")
     o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter,
-                       optimise=(method == "adjoint"),
-                       local=("lambda" if method == "lambda" else "direct"), **kw)
+                       optimise=(method == "adjoint"), **kw)
     return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
                         err0=o["err0"], niter=o["niter"], nfev=o["nfev"],
                         gnorm=o["gnorm"], status=o.get("status", ""),
@@ -201,10 +199,10 @@ def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
     sphere. More accurate (chamfer 0.020 vs 0.032 at L=16) and ~26x slower
     (19 s/mesh against 0.74).
 
-    ``method="local"`` — each mesh is measured on its **own** cMCF sphere, which
+    ``method="direct"`` — each mesh is measured on its **own** cMCF sphere, which
     is then discarded. ρ = H·e^u − 1 is a measurement of a function on S², so the
     per-shape sphere is the instrument and not part of the answer: measured, a
-    local code decodes on a sphere it never saw at 0.5–0.9x the error it gets on
+    direct code decodes on a sphere it never saw at 0.5–0.9x the error it gets on
     its own. Möbius normalisation (inside ``base_sphere``) is what makes the
     per-shape spheres mutually consistent and hence the codes comparable — it is
     not optional here.
@@ -213,8 +211,8 @@ def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
     process pool (NumPy/SciPy-bound, so threads will not help); left as a hook
     rather than a guess at your scheduler.
     """
-    if method not in ("adjoint", "local"):
-        raise ValueError(f"method must be 'adjoint' or 'local', got {method!r}")
+    if method not in ("adjoint", "direct"):
+        raise ValueError(f"method must be 'adjoint' or 'direct', got {method!r}")
     if n_jobs != 1:
         raise NotImplementedError(
             "parallel encoding is a deliberate hook, not an omission: use a "
@@ -237,11 +235,11 @@ def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
                     f"template mesh is the natural choice), or remesh the inputs")
         per_mesh_sphere, decode_sphere = sphere, sphere
     else:
-        # Local: each mesh gets its own cMCF sphere. Passing a shared one here
-        # would make this the adjoint's initialiser rather than design A.
+        # Direct: each mesh gets its own cMCF sphere. Passing a shared one here
+        # would make this the adjoint's initialiser rather than a measurement.
         if sphere is not None:
             raise ValueError(
-                "method='local' measures each mesh on its OWN cMCF sphere; a "
+                "method='direct' measures each mesh on its OWN cMCF sphere; a "
                 "shared `sphere` is meaningless here. Pass the decode sphere to "
                 "`decode` instead.")
         per_mesh_sphere = None

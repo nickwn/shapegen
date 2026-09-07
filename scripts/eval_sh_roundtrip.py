@@ -6,8 +6,8 @@
 Reports the relative Procrustes error of ``mesh'`` against ``mesh`` for each L,
 for two encoders:
 
-  baseline   rho from the lambda route (geom.spin.mesh_to_rho), projected to
-             bandwidth L *afterwards*;
+  baseline   rho from the direct encoder (geom.spin.mesh_to_rho_direct),
+             projected to bandwidth L *afterwards*;
   optimised  rho_hat optimised *at* bandwidth L against decoded shape error,
              through the adjoint (geom.encode.encode_sh).
 
@@ -98,11 +98,11 @@ def main() -> None:
     print(f"cMCF param: {time.perf_counter() - t0:.1f}s, "
           f"quasi-conformal distortion {qc:.4f}")
 
-    # The lambda-route encoder serves double duty: it is the *baseline* curve,
-    # and (projected to each bandwidth) the cold initialiser for the optimiser.
+    # The direct encoder serves double duty: it is the *baseline* curve, and
+    # (projected to each bandwidth) the cold initialiser for the optimiser.
     t0 = time.perf_counter()
-    rho0 = spin.mesh_to_rho(mesh, sph=sph)[0]
-    print(f"baseline rho (lambda route): {time.perf_counter() - t0:.1f}s")
+    rho0 = spin.mesh_to_rho_direct(mesh, sph)
+    print(f"baseline rho (direct): {time.perf_counter() - t0:.1f}s")
 
     # Built once at the largest bandwidth and column-sliced for every smaller
     # one.  Legal because real_sh_basis orders columns by ascending degree, so

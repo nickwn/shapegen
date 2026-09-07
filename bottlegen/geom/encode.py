@@ -1,10 +1,10 @@
 """The ρ encoder: ``mesh → ρ̂``, band-limited spherical-harmonic coefficients.
 
 This is the inverse of the decode in :mod:`bottlegen.geom.dirac`, and it is built
-by *optimisation* rather than by a local formula. The two local encoders —
-:func:`~bottlegen.geom.spin.mesh_to_rho` (project a measured λ) and the direct
-``ρ = H e^u − 1`` — both minimise a Dirac-consistency residual, which is not the
-quantity anyone reports. Minimising decoded *shape error* directly, through
+by *optimisation* rather than by a local formula. The local encoder
+(:func:`~bottlegen.geom.spin.mesh_to_rho_direct`, ``ρ = H e^u − 1``) minimises a
+Dirac-consistency residual, which is not the quantity anyone reports.
+Minimising decoded *shape error* directly, through
 :func:`~bottlegen.geom.dirac_adjoint.decode_adjoint`, closes roughly half the gap
 they leave: measured on a bottle, 0.1095 → 0.0569.
 
@@ -280,12 +280,12 @@ def decode_sh(coeffs: np.ndarray, sph: np.ndarray, F: np.ndarray,
 def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
               rho0=None, cmcf_iters: int = 300, verbose: bool = False,
               alpha: float = 0.75, maxcor: int = 40, precond=None,
-              optimise: bool = True, local: str = "direct"):
+              optimise: bool = True):
     """Encode ``mesh`` as ``(L+1)²`` real SH coefficients of ρ.
 
     ``sph`` is the cMCF sphere parameterisation (computed if absent — it is the
     expensive step, so pass it when sweeping ``L``). ``Y`` is a basis of at least
-    ``(L+1)²`` columns. ``c0`` overrides the default initialiser (the λ-route
+    ``(L+1)²`` columns. ``c0`` overrides the default initialiser (the direct
     encoder projected to this bandwidth), which is a poor answer but a good
     starting point — measured ``‖ρ_opt − ρ₀‖/‖ρ₀‖ = 0.19``.
 
@@ -308,19 +308,12 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
         Y = real_sh_basis(sph, L)
     Yl = Y[:, :n_coeffs(L)]          # accept an over-wide basis and slice
 
-    # Initialiser. The local lambda-route encoder is a poor *answer* (it
-    # minimises Dirac consistency, not shape error) but a good *starting point*:
-    # measured ||rho_opt - rho_0||/||rho_0|| = 0.19.
+    # Initialiser. The local encoder is a poor *answer* (it minimises Dirac
+    # consistency, not shape error) but a good *starting point*: measured
+    # ||rho_opt - rho_0||/||rho_0|| = 0.19.
     if c0 is None:
         if rho0 is None:
-            # "direct" (rho = H e^u - 1, read off the geometry) is the default:
-            # measured 20-35% better than the lambda route at every bandwidth and
-            # resolution tried, at the same cost. The gap widens with L because
-            # the lambda route's rho carries least-squares fit noise that extra
-            # bandwidth faithfully reproduces -- it gets WORSE from L=12 to L=24
-            # (0.0439 -> 0.0553 at subdiv 4) where direct barely degrades.
-            rho0 = (spin.mesh_to_rho_direct(mesh, sph) if local == "direct"
-                    else spin.mesh_to_rho(mesh, sph=sph)[0])
+            rho0 = spin.mesh_to_rho_direct(mesh, sph)
         # Galerkin in the sphere's own L2 -- see sh_project. Unweighted least
         # squares here costs ~3.9x at low L on a cMCF sphere.
         from .operators import vertex_areas  # noqa: PLC0415

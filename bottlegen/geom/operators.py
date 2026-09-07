@@ -13,10 +13,8 @@ from __future__ import annotations
 import numpy as np
 import scipy.sparse as sp
 
-__all__ = [
-    "cotan_laplacian", "vertex_areas", "vertex_normals",
-    "edge_cotan_weights", "angle_defect",
-]
+__all__ = ["cotan_laplacian", "vertex_areas", "vertex_normals",
+           "edge_cotan_weights"]
 
 
 def _face_cotangents(V: np.ndarray, F: np.ndarray):
@@ -91,21 +89,3 @@ def edge_cotan_weights(V: np.ndarray, F: np.ndarray):
     w = np.zeros(len(edges))
     np.add.at(w, inv.ravel(), cc)
     return edges, w
-
-
-def angle_defect(V: np.ndarray, F: np.ndarray) -> np.ndarray:
-    """Angle defect ``2π − Σ θ_i`` per vertex (integrated Gaussian curvature)."""
-    i0, i1, i2 = F[:, 0], F[:, 1], F[:, 2]
-
-    def angle(a, b, c):  # interior angle at vertex a
-        u = V[b] - V[a]
-        v = V[c] - V[a]
-        u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-30)
-        v /= np.maximum(np.linalg.norm(v, axis=1, keepdims=True), 1e-30)
-        return np.arccos(np.clip((u * v).sum(1), -1.0, 1.0))
-
-    defect = np.full(len(V), 2.0 * np.pi)
-    np.add.at(defect, i0, -angle(i0, i1, i2))
-    np.add.at(defect, i1, -angle(i1, i2, i0))
-    np.add.at(defect, i2, -angle(i2, i0, i1))
-    return defect
