@@ -56,16 +56,20 @@ def test_shape_error_is_similarity_invariant():
 
 
 def test_base_sphere_is_gauge_fixed_and_round():
-    """Both parameterisations must land on the unit sphere with the conformal
-    barycenter at the origin — that is what makes ρ̂ comparable across shapes."""
+    """The parameterisation must land on the unit sphere with the conformal
+    barycenter at the origin — that is what makes ρ̂ comparable across shapes.
+
+    The barycenter is weighted by the **mesh's** conformal density, not the
+    sphere's; centring the sphere's own vertices instead would leave the ℓ=1
+    Möbius freedom alive and the codes incomparable.
+    """
     from bottlegen.geom.operators import vertex_areas
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
     w = vertex_areas(mesh.vertices, mesh.faces)
     w = w / w.sum()
-    for method in ("cmcf", "willmore"):
-        S = codec.base_sphere(mesh, method=method)
-        assert np.abs(np.linalg.norm(S, axis=1) - 1.0).max() < 1e-9
-        assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
+    S = codec.base_sphere(mesh)
+    assert np.abs(np.linalg.norm(S, axis=1) - 1.0).max() < 1e-9
+    assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
 
 
 def test_direct_and_adjoint_are_both_available_and_differ():

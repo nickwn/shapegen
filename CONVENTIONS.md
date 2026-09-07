@@ -25,12 +25,11 @@ tests assert them. If a library disagrees, wrap it and verify against these.
 ## Base sphere and gauge
 
 - The codec decodes from a **base sphere** carrying the mesh's own connectivity.
-  `codec.base_sphere` produces it (cMCF or Willmore flow) and Möbius-normalizes
-  it against the mesh's conformal density.
+  `codec.base_sphere` produces it (cMCF) and Möbius-normalizes it against the
+  mesh's conformal density.
 - Möbius normalization kills the ℓ=1 freedom; the unit-sphere projection kills
   ℓ=0 scale. **Rotation is not fixed by anything** and remains an open gauge —
-  two shapes differing by a rotation encode to different ρ̂. See
-  `SIMPLIFICATION_PLAN.md` §7.
+  two shapes differing by a rotation encode to different ρ̂.
 - ρ̂ is meaningless without its base sphere; `EncodeResult` carries both.
 
 ## Real spherical harmonics
@@ -41,6 +40,7 @@ tests assert them. If a library disagrees, wrap it and verify against these.
 
 ## Precision split (M3 / MPS)
 
-- MPS has no float64. Run all of `geom/`, `flow/willmore.py`, conformal param,
-  and the Dirac solve in **NumPy/SciPy float64 on CPU**. Networks run
-  **float32 on MPS**. The spectral core (`spectral/`) is float64 NumPy.
+- MPS has no float64. Run all of `geom/` — conformal param and the Dirac solve
+  included — in **NumPy/SciPy float64 on CPU**. The spectral core (`spectral/`)
+  is float64 NumPy. The float32/MPS half applies to networks, of which this
+  package currently has none.

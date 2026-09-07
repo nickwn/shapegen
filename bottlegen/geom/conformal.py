@@ -12,14 +12,13 @@ freedom removed.
      the sphere parameterisation to the origin via ball-automorphism inversions.
      This is the Möbius-registration centering: it kills the 3-dimensional
      Möbius "boost" freedom, leaving only rotation. (Scale is fixed by the unit
-     sphere projection; **rotation is not fixed by anything** — see
-     ``SIMPLIFICATION_PLAN.md`` §7.)
+     sphere projection; **rotation is not fixed by anything**, and that gauge is
+     still open.)
 
 ``scripts/willmore_flow.py`` offers an alternative to step 1 via the spin
-transform, which on a bottle at subdiv 3 gives slightly *lower* distortion
-(0.017 vs 0.019). Either works: because the encoder optimises decoded *shape*
-error rather than the correspondence, the parameterisation's conformal quality is
-largely compensated — the round trip lands well below the qc figure.
+transform, with slightly lower quasi-conformal distortion on a bottle (0.017 vs
+0.019). It is not wired into :func:`~bottlegen.codec.base_sphere`: qc does not
+predict reconstruction accuracy, so that gap buys nothing.
 """
 
 from __future__ import annotations

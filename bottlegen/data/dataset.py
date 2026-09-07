@@ -8,7 +8,8 @@ representation cannot express and the spin transform can.
 This module previously also held the ``BottleSigma`` torch dataset and Wigner-D
 rotation augmentation for the σ̂ representation; both went with the σ̂ stack. A
 real dataset will want its own loader, and the rotation question it was solving
-is still open — see ``SIMPLIFICATION_PLAN.md`` §7.
+is still open: ρ̂ is not rotation-invariant, so two shapes differing by a rotation
+encode to entirely different coefficients.
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
 """Device + precision split (see CONVENTIONS.md).
 
-MPS has no float64, so all of ``geom/``, ``flow/willmore.py``, the conformal
-param and the Dirac solve run in **NumPy/SciPy float64 on CPU**; the networks run
-**float32 on MPS** (or CPU as a fallback).
+MPS has no float64, so all of ``geom/`` — the conformal parameterisation and the
+Dirac solve included — runs in **NumPy/SciPy float64 on CPU**. The float32/MPS
+half is a placeholder: there are no networks in this package any more.
 """
 
 from __future__ import annotations

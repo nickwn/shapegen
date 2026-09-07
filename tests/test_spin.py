@@ -146,7 +146,7 @@ def test_mesh_to_rho_decodes_back_to_the_input():
     """End-to-end encode → decode on a real (non-star-shaped) bottle."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     from bottlegen import codec
-    sph = codec.base_sphere(mesh, method="cmcf")
+    sph = codec.base_sphere(mesh)
     rho = spin.mesh_to_rho_direct(mesh, sph)
     lam, gamma = dirac.spin_transform(sph, mesh.faces, rho)
     V = dirac.integrate_edges(sph, mesh.faces, lam)

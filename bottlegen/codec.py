@@ -15,8 +15,8 @@ gives a different mesh. :class:`EncodeResult` carries it for that reason.
 
 What the codec does *not* fix: the decode determines an immersion only up to a
 similarity, and Möbius normalisation pins everything except **rotation**. Two
-shapes differing by a rotation encode to entirely different ρ̂. See
-``SIMPLIFICATION_PLAN.md`` §7 before training anything on these coefficients.
+shapes differing by a rotation encode to entirely different ρ̂. Settle that
+before training anything on these coefficients.
 """
 
 from __future__ import annotations
@@ -94,32 +94,22 @@ def template_sphere(subdiv: int = 3) -> np.ndarray:
     return V / np.linalg.norm(V, axis=1, keepdims=True)
 
 
-def base_sphere(mesh, method: str = "cmcf", **kw) -> np.ndarray:
+def base_sphere(mesh, iters: int = 300) -> np.ndarray:
     """Sphere parameterisation of ``mesh`` on its own connectivity, gauge-fixed.
 
-    ``method="cmcf"``      conformalized mean-curvature flow.
-    ``method="willmore"``  conformal Willmore flow via the spin transform.
+    Conformalized mean-curvature flow, then Möbius-normalised against the mesh's
+    own conformal density — which kills the ℓ=1 freedom and leaves only rotation.
 
-    Both are Möbius-normalised against the mesh's own conformal density, which
-    kills the ℓ=1 freedom and leaves only rotation. Measured on a bottle at
-    subdiv 3, quasi-conformal distortion is 0.0194 (cmcf) and 0.0170 (willmore).
-
-    That gap matters less than it looks: the encoder optimises decoded *shape*
-    error rather than the correspondence, so the parameterisation's conformal
-    quality is largely compensated — the round trip lands roughly 6× below either
-    figure. Pick on cost and robustness, not distortion.
+    A ``method="willmore"`` alternative (conformal Willmore flow via the spin
+    transform) was removed. It was selected on quasi-conformal distortion, where
+    it wins narrowly on a bottle at subdiv 3 (0.0170 against cMCF's 0.0194) — but
+    qc turns out not to predict reconstruction accuracy at all (see
+    :func:`~bottlegen.geom.spin.qc_distortion`), so the gap bought nothing, and
+    reaching it made this package import from ``scripts/``. The flow itself is
+    still there as ``scripts/willmore_flow.py`` if you want to experiment.
     """
-    if method == "cmcf":
-        return _cf.mobius_normalize(
-            mesh, _cf.spherical_conformal_map(mesh, iters=kw.pop("iters", 300)))
-    if method == "willmore":
-        from scripts.willmore_flow import flow_trajectory  # noqa: PLC0415
-        traj = flow_trajectory(mesh.vertices, mesh.faces,
-                               tau=kw.pop("tau", 0.5), steps=kw.pop("steps", 30),
-                               mode="gradual")
-        S = traj[-1] - traj[-1].mean(0)
-        return _cf.mobius_normalize(mesh, S / np.linalg.norm(S, axis=1, keepdims=True))
-    raise ValueError(f"unknown method {method!r} (expected 'cmcf' or 'willmore')")
+    return _cf.mobius_normalize(
+        mesh, _cf.spherical_conformal_map(mesh, iters=iters))
 
 
 def encode(mesh, L: int, sphere=None, maxiter: int = 200,
@@ -268,4 +258,4 @@ def _canonical_for(mesh) -> np.ndarray:
         t = template_sphere(sub)
         if len(t) == n:
             return t
-    return base_sphere(mesh, method="cmcf")
+    return base_sphere(mesh)
