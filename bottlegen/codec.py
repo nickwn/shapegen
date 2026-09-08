@@ -113,27 +113,54 @@ def base_sphere(mesh, iters: int = 300) -> np.ndarray:
 
 
 def encode(mesh, L: int, sphere=None, maxiter: int = 200,
-           method: str = "adjoint", **kw) -> EncodeResult:
+           method: str = "direct", **kw) -> EncodeResult:
     """``mesh → ρ̂ ∈ ℝ^((L+1)²)``.
 
     Two encoders:
 
-    * ``"adjoint"`` (default) — optimises decoded shape error through the adjoint.
-      The most accurate and ~26x the cost (19 s/mesh against 0.74 at subdiv 3).
-      Its fit absorbs the discretisation it was fitted against, so its codes are
-      *not* comparable across meshes: same surface at two triangulations, per-band
-      coefficients differ 7.4% at L=4 but 46.0% at L=12.
-    * ``"direct"`` — ``ρ = H·e^u − 1`` read straight off the geometry, with
-      ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`. Closed-form, so
-      nothing to converge and no iteration cap to police. A measurement of a
-      continuum quantity, so it converges under refinement and stays comparable
-      across meshes (7.7% → 12.4% over the same range). Note its accuracy is
-      **not monotone in L** — it peaks around L=8-12 and degrades after, because
-      extra bandwidth faithfully reproduces more of a biased local measurement.
+    * ``"direct"`` (default) — ``ρ = H·e^u − 1`` read straight off the geometry,
+      with ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`. Closed-form,
+      so nothing to converge and no iteration cap to police (``niter`` is 0 and
+      means it). A measurement of a continuum quantity, so it converges under
+      refinement and stays **comparable across meshes** (per-band coefficients
+      differ 7.7% at L=4, 12.4% at L=12 between two triangulations of one
+      surface). Its accuracy is **not monotone in L** — see below.
+    * ``"adjoint"`` — optimises decoded shape error through the adjoint. Several
+      times more accurate on a fixed mesh (0.0127 against 0.0644 on a bottle at
+      L=12) and ~26x the cost: 19 s/mesh at subdiv 3, and **321-376 s** at 26k
+      vertices. Its fit absorbs the discretisation it was fitted against, so its
+      codes are *not* comparable across meshes — the same 7.4% at L=4 becomes
+      **46.0%** at L=12.
 
-    Choose on what has to be true: ``adjoint`` for reconstruction accuracy on a
-    *fixed* discretisation, ``direct`` for speed and for codes that mean the same
-    thing across meshes.
+    **Why ``direct`` is the default.** Accuracy on one fixed mesh is the wrong
+    axis for the thing this codec exists to feed. A dataset encoder has to be
+    affordable (the adjoint puts ~9000 meshes at two to three months of compute)
+    and its codes have to mean the same thing across meshes, which the adjoint's
+    measurably do not. Reach for ``adjoint`` when you are reconstructing one
+    known mesh as accurately as possible.
+
+    The trade is real and it is not small: on a smoothed FaceScape head ``direct``
+    sits at ~0.084 *regardless of L* while the adjoint reaches 0.021. On faces
+    specifically, ρ_direct comes out 10-30x too small — ``e^u`` exponentiates the
+    error in ``u`` — and that is worth fixing before leaning on this default for
+    scanned data.
+
+    **For ``direct``, ``L`` is a regularisation parameter, not a fidelity knob.**
+    Measured on a bottle at subdiv 3: 0.115 (L=4), **0.054 (L=8)**, 0.064 (L=12),
+    0.062 (L=16), 0.0641 (L=24) — and decoding ρ_direct with *no band limit at
+    all* gives 0.0641 to five digits. So nothing runs away; the curve converges to
+    the error of reproducing ρ_direct faithfully, and **the low-L values are
+    anomalously good rather than the high-L ones anomalously bad**. Band-limiting
+    is accidentally truncating the estimator's bias, which lives in the high
+    bands: against the shape-optimal ρ, per-band error is 0.15-0.33x for ℓ ≤ 6 and
+    1.3-11x for ℓ ≥ 8. γ says the same thing independently, rising monotonically
+    with bandwidth (1.5e-3 at L=4 to 3.7e-2 unlimited, at subdiv 4) — each extra
+    band makes ρ *less* realisable as any surface's curvature half-density.
+
+    Consequence: **choose L by validation, and re-choose it per resolution.** The
+    optimum moves — L=8 at subdiv 3-4, L=12 at subdiv 5 — because it tracks the
+    discretisation floor, not the shape. A pipeline that treats more bandwidth as
+    better will silently pick the wrong one.
 
     A third encoder, ``"lambda"`` (read λ off the correspondence, least-squares ρ
     against the Dirac energy), was removed: ``direct`` beat it by 20-35% at every
@@ -146,8 +173,8 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     decode is nonlinear, so the band-limited optimum is not the projection of the
     unconstrained one, and the difference grows as L falls.
     """
-    if method not in ("adjoint", "direct"):
-        raise ValueError(f"method must be 'adjoint' or 'direct', got {method!r}")
+    if method not in ("direct", "adjoint"):
+        raise ValueError(f"method must be 'direct' or 'adjoint', got {method!r}")
     o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter,
                        optimise=(method == "adjoint"), **kw)
     return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
@@ -175,7 +202,7 @@ def shape_error(target: np.ndarray, X: np.ndarray) -> float:
     return float(np.sqrt(_enc.procrustes(target, X)[0]))
 
 
-def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
+def encode_dataset(meshes, L: int, method: str = "direct", sphere=None,
                    maxiter: int = 200, n_jobs: int = 1, verbose: bool = False):
     """Encode many meshes into a comparable code set.
 
@@ -183,26 +210,30 @@ def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
     returned separately and deliberately**: the two methods mean different things
     by "the sphere", and conflating them is silent rather than loud.
 
-    ``method="adjoint"`` — one **shared** sphere for every mesh, defaulting to
-    :func:`template_sphere`. The fit absorbs that sphere's discretisation, which
-    is harmless precisely because it never changes. Decode against the same
-    sphere. More accurate (chamfer 0.020 vs 0.032 at L=16) and ~26x slower
-    (19 s/mesh against 0.74).
-
-    ``method="direct"`` — each mesh is measured on its **own** cMCF sphere, which
-    is then discarded. ρ = H·e^u − 1 is a measurement of a function on S², so the
-    per-shape sphere is the instrument and not part of the answer: measured, a
+    **``sphere`` decides the sphere policy, not ``method``.** They used to be
+    coupled — ``adjoint`` implied a shared sphere and ``direct`` a per-mesh one,
+    with a shared sphere *rejected* for ``direct``. That guard blocked the one
+    operation a generative pipeline needs most: measure a whole dataset against a
+    single template, cheaply. It was also too strong on its own evidence, since a
     direct code decodes on a sphere it never saw at 0.5–0.9x the error it gets on
-    its own. Möbius normalisation (inside ``base_sphere``) is what makes the
-    per-shape spheres mutually consistent and hence the codes comparable — it is
-    not optional here.
+    its own — portable, not meaningless.
+
+    ``sphere=<array>``   every mesh is encoded against that one sphere, whichever
+                         method. **This is what generation requires**: at sample
+                         time there is no mesh, so no cMCF sphere to recover.
+    ``sphere=None``      ``adjoint`` picks :func:`template_sphere` by vertex
+                         count; ``direct`` measures each mesh on its own cMCF
+                         sphere and returns a canonical decode sphere separately.
+                         Möbius normalisation (inside :func:`base_sphere`) is what
+                         makes those per-shape spheres mutually consistent, and it
+                         is not optional in that mode.
 
     Encoding is embarrassingly parallel across meshes. ``n_jobs > 1`` needs a
     process pool (NumPy/SciPy-bound, so threads will not help); left as a hook
     rather than a guess at your scheduler.
     """
-    if method not in ("adjoint", "direct"):
-        raise ValueError(f"method must be 'adjoint' or 'direct', got {method!r}")
+    if method not in ("direct", "adjoint"):
+        raise ValueError(f"method must be 'direct' or 'adjoint', got {method!r}")
     if n_jobs != 1:
         raise NotImplementedError(
             "parallel encoding is a deliberate hook, not an omission: use a "
@@ -211,28 +242,24 @@ def encode_dataset(meshes, L: int, method: str = "adjoint", sphere=None,
     meshes = list(meshes)
     n = len(meshes[0].vertices)
 
-    if method == "adjoint":
-        if sphere is None:
-            for sub in range(1, 8):                   # match the vertex count
-                t = template_sphere(sub)
-                if len(t) == n:
-                    sphere = t
-                    break
-            else:
-                raise ValueError(
-                    f"no icosphere has {n} vertices; pass `sphere` explicitly "
-                    f"(for registered data, the cMCF sphere of the dataset's own "
-                    f"template mesh is the natural choice), or remesh the inputs")
+    if sphere is None and method == "adjoint":
+        # The adjoint has no per-mesh mode: its fit absorbs whatever sphere it
+        # was given, so that sphere has to be the same one every time.
+        for sub in range(1, 8):                       # match the vertex count
+            t = template_sphere(sub)
+            if len(t) == n:
+                sphere = t
+                break
+        else:
+            raise ValueError(
+                f"no icosphere has {n} vertices; pass `sphere` explicitly "
+                f"(for registered data, the cMCF sphere of the dataset's own "
+                f"template mesh is the natural choice), or remesh the inputs")
+
+    if sphere is not None:
         per_mesh_sphere, decode_sphere = sphere, sphere
     else:
-        # Direct: each mesh gets its own cMCF sphere. Passing a shared one here
-        # would make this the adjoint's initialiser rather than a measurement.
-        if sphere is not None:
-            raise ValueError(
-                "method='direct' measures each mesh on its OWN cMCF sphere; a "
-                "shared `sphere` is meaningless here. Pass the decode sphere to "
-                "`decode` instead.")
-        per_mesh_sphere = None
+        per_mesh_sphere = None                        # direct, per-mesh cMCF
         decode_sphere = _canonical_for(meshes[0])
 
     out = []

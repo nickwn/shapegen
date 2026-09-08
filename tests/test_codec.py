@@ -16,7 +16,7 @@ def test_roundtrip_reproduces_the_reported_error():
     """``decode(encode(m))`` must actually reproduce the error ``encode`` claims —
     the one contract everything downstream leans on."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    res = codec.encode(mesh, L=8, maxiter=40)
+    res = codec.encode(mesh, L=8, maxiter=40, method="adjoint")
     X = codec.decode(res.coeffs, res.sphere, mesh.faces)
     err = codec.shape_error(mesh.vertices, X)
     print(f"[codec] {res}  decode-check {err:.5f}")
@@ -27,7 +27,7 @@ def test_roundtrip_reproduces_the_reported_error():
 
 def test_encode_beats_its_initialiser():
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=1)[0]
-    res = codec.encode(mesh, L=8, maxiter=40)
+    res = codec.encode(mesh, L=8, maxiter=40, method="adjoint")
     assert res.err < 0.6 * res.err0
 
 
@@ -38,7 +38,7 @@ def test_converged_flag_is_honest():
     only thing standing between that and a silently overstated result.
     """
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
-    capped = codec.encode(mesh, L=4, maxiter=1)
+    capped = codec.encode(mesh, L=4, maxiter=1, method="adjoint")
     assert not capped.converged
 
 
@@ -107,7 +107,8 @@ def test_encode_dataset_shares_one_sphere():
     """Every code in a dataset must be defined against the same sphere, else the
     coefficients do not share a meaning and the model learns noise."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results, dec = codec.encode_dataset(meshes, L=4, maxiter=20)
+    coeffs, results, dec = codec.encode_dataset(meshes, L=4, maxiter=20,
+                                               method="adjoint")
     assert coeffs.shape == (2, codec.n_coeffs(4))
     assert np.array_equal(results[0].sphere, results[1].sphere)
     assert np.array_equal(results[0].sphere, codec.template_sphere(2))
@@ -115,9 +116,8 @@ def test_encode_dataset_shares_one_sphere():
 
 
 def test_encode_dataset_direct_uses_per_mesh_spheres():
-    """Each mesh is measured on its OWN cMCF sphere, and the decode
-    sphere is returned separately. A shared sphere here would silently turn this
-    into the adjoint's initialiser instead."""
+    """With no ``sphere`` given, ``direct`` measures each mesh on its OWN cMCF
+    sphere and returns a canonical decode sphere separately."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
     coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="direct")
     assert coeffs.shape == (2, codec.n_coeffs(4))
@@ -130,10 +130,18 @@ def test_encode_dataset_direct_uses_per_mesh_spheres():
     assert np.isfinite(X).all()
 
 
-def test_encode_dataset_direct_rejects_a_shared_sphere():
-    """Passing a shared sphere to method='direct' is a category error, not a
-    convenience — it would measure every shape against one parameterisation."""
+def test_encode_dataset_direct_accepts_a_shared_sphere():
+    """``direct`` against ONE template is the mode a generative pipeline needs —
+    at sample time there is no mesh, so there is no cMCF sphere to recover.
+
+    This was previously rejected as a category error. It is not: measured, a
+    direct code decodes on a sphere it never saw at 0.5-0.9x the error it gets on
+    its own, so a shared template is portable rather than meaningless.
+    """
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    with pytest.raises(ValueError, match="(?i)own cMCF sphere"):
-        codec.encode_dataset(meshes, L=4, method="direct",
-                             sphere=codec.template_sphere(2))
+    T = codec.template_sphere(2)
+    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="direct",
+                                                sphere=T)
+    assert np.array_equal(dec, T)
+    assert all(np.array_equal(r.sphere, T) for r in results)
+    assert coeffs.shape == (2, codec.n_coeffs(4))
