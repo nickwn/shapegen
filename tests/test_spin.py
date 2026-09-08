@@ -154,3 +154,37 @@ def test_mesh_to_rho_decodes_back_to_the_input():
     print(f"[bottle encode->decode] err={err:.4f} gamma={gamma:.2e}")
     assert np.isfinite(V).all()
     assert err < 0.15
+
+
+def test_base_sphere_residual_flags_a_degenerate_sphere():
+    """A base sphere must reproduce rho = 0 against itself, and this catches the
+    case where it cannot.
+
+    Regression for a real and severe bug: the face pipeline used the cMCF sphere
+    of a head as its base sphere. That mesh has 2.1e6x triangle-area spread, and
+    ``Hvec = ½ M⁻¹ L V`` divides by vertex areas reaching 1e-9, so H came out in
+    [-8030, +3266] where it should be 1. Every rho computed there carried the same
+    huge spurious field as a fixed offset -- which is why `direct` looked flat in
+    L and why its per-band error looked (implausibly) large at l=10 on a mesh
+    whose Nyquist is l~80.
+    """
+    from bottlegen.geom.mesh import icosphere
+    from bottlegen.geom.spin import base_sphere_residual
+    for sub in (2, 3, 4):
+        m = icosphere(sub)
+        P = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
+        r = base_sphere_residual(P, m.faces)
+        print(f"[base sphere sub={sub}] residual {r:.4f}")
+        assert r < 0.05, "a uniform icosphere must be a usable base sphere"
+
+    # A sphere whose triangulation is wrecked must be caught. Squash the vertex
+    # distribution toward a pole while keeping every vertex ON the unit sphere:
+    # the geometry is still a sphere, the discretisation is not usable.
+    m = icosphere(3)
+    P = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
+    Q = P.copy()
+    Q[:, 2] = np.sign(Q[:, 2]) * np.abs(Q[:, 2]) ** 0.02      # crowd the equator
+    Q /= np.linalg.norm(Q, axis=1, keepdims=True)
+    bad = base_sphere_residual(Q, m.faces)
+    print(f"[base sphere squashed] residual {bad:.3f}")
+    assert bad > 0.05, "a degenerate triangulation must be flagged"

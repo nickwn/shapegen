@@ -35,8 +35,37 @@ from .mesh import triangle_areas
 
 __all__ = [
     "rotation_to_quaternion", "face_lambdas", "lambda_from_correspondence",
-    "qc_distortion", "mesh_to_rho_direct",
+    "qc_distortion", "mesh_to_rho_direct", "base_sphere_residual",
 ]
+
+
+def base_sphere_residual(sph, faces) -> float:
+    """Self-test for a base sphere: ``rho`` of the sphere against **itself**.
+
+    Must be ~0 — a unit sphere has ``H = 1`` and the identity map has ``e^u = 1``,
+    so ``rho = H e^u - 1 = 0``. Anything larger means the discretisation cannot
+    support the curvature operator, and **every** rho computed on that sphere
+    carries the same spurious field as a fixed additive offset.
+
+    This is not hypothetical. The cMCF sphere of a FaceScape head has 2.1e6x
+    triangle-area spread, and ``Hvec = ½ M⁻¹ L V`` divides by vertex areas that
+    reach 1e-9, so H comes out in the range **[-8030, +3266]** where it should be
+    1, with rms 8.6. Measured consequences on real faces at L=16: reconstruction
+    0.0932 on that sphere against **0.0395** on an icosphere resampling of the
+    same heads, and a known band-limited rho was recovered with 314% coefficient
+    error instead of 3.6%.
+
+    Guideline: below ~0.05 is fine (an icosphere gives 0.004 at subdiv 5); above
+    ~0.5 the sphere is unusable and no amount of bandwidth will help, because the
+    error is a fixed offset rather than anything the basis can resolve.
+    """
+    import numpy as _np  # noqa: PLC0415
+    from .mesh import Mesh  # noqa: PLC0415
+    from .operators import vertex_areas  # noqa: PLC0415
+    sph = _np.asarray(sph, dtype=float)
+    r = mesh_to_rho_direct(Mesh(sph, faces), sph)
+    w = vertex_areas(sph, faces)
+    return float(_np.sqrt((r ** 2 * w).sum() / w.sum()))
 
 
 def rotation_to_quaternion(R: np.ndarray) -> np.ndarray:
