@@ -145,3 +145,23 @@ def test_encode_dataset_direct_accepts_a_shared_sphere():
     assert np.array_equal(dec, T)
     assert all(np.array_equal(r.sphere, T) for r in results)
     assert coeffs.shape == (2, codec.n_coeffs(4))
+
+
+def test_parallel_encode_matches_serial():
+    """``n_jobs`` must not change the answer, and must not scramble the order.
+
+    Order is the real risk: collecting results as they complete rather than by
+    index would misalign every code with its mesh, and nothing downstream would
+    notice. Tolerance is 1e-8 rather than exact because ARPACK's eigensolve is not
+    bit-reproducible — two *serial* runs differ at 6e-11 — so demanding equality
+    would be testing the wrong thing.
+    """
+    meshes = demo_bottle_meshes(n=4, subdiv=2, seed=0)
+    T = codec.template_sphere(2)
+    a, _, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=1)
+    b, _, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=2)
+    assert np.abs(a - b).max() < 1e-8
+    # order preserved: each row must match ITS OWN mesh, not merely be present
+    for i, m in enumerate(meshes):
+        solo = codec.encode(m, L=4, sphere=T, method="direct").coeffs
+        assert np.abs(b[i] - solo).max() < 1e-8

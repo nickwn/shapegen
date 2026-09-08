@@ -11,7 +11,7 @@ against distributions whose answer is known in closed form, not against faces.
 import numpy as np
 import pytest
 
-from bottlegen.models.basis import PCABasis
+from bottlegen.models.basis import PCABasis, RhoBasis
 from bottlegen.models.flow import (VelocityField, gaussian_baseline,
                                    sample_flow, train_flow)
 
@@ -158,3 +158,116 @@ def test_gaussian_baseline_matches_the_data_moments():
     assert np.abs(G.std(0) / X.std(0) - 1.0).max() < 0.05
     # ...and it is DIAGONAL, which is exactly why it is a weak baseline
     assert abs(np.corrcoef(G.T)[0, 1]) < 0.05
+
+
+def test_variance_floor_blurs_by_the_amount_it_says():
+    """§4(b): ``sigma`` convolves the target with N(0, sigma^2), so the samples
+    should be wider than the data by that much and no more.
+
+    The floor exists for near-singular targets, where flow matching is ill-posed
+    rather than data-starved. Its cost has to be predictable to be worth paying.
+    """
+    X = _blobs(n=800, seed=3)
+    sig = 0.5
+    model, _ = train_flow(X, steps=3000, batch=256, width=128, depth=3,
+                          sigma=sig, seed=0)
+    S = sample_flow(model, n=4000, k=2, steps=100, seed=0)
+    want = np.sqrt(X.std(0) ** 2 + sig ** 2)
+    print(f"[floor] data {X.std(0).round(3)} + sigma {sig} -> want "
+          f"{want.round(3)}, got {S.std(0).round(3)}")
+    assert np.abs(S.std(0) / want - 1.0).max() < 0.25
+
+
+def test_truncated_sampling_rescales_by_t_end_not_one_minus_t_end():
+    """§4(c): the training path is ``(1-t) z0 + t z1``, so stopping at ``t_end``
+    shrinks the sample by ``t_end`` and ``rescale`` must divide by that.
+
+    Dividing by ``1 - t_end`` is the natural-looking mistake and inflates samples
+    by 1/eps — 50x at eps=0.02. It is silent unless someone checks the std, which
+    is what this does. Regression test for a bug that shipped for one commit.
+    """
+    X = _blobs(n=600, seed=4)
+    model, _ = train_flow(X, steps=2500, batch=256, width=128, depth=3, seed=0)
+    full = sample_flow(model, n=3000, k=2, steps=100, seed=0)
+    for t_end in (0.98, 0.95):
+        trunc = sample_flow(model, n=3000, k=2, steps=100, t_end=t_end, seed=0)
+        ratio = trunc.std(0) / full.std(0)
+        print(f"[t_end={t_end}] std ratio vs full integration {ratio.round(3)}")
+        assert np.abs(ratio - 1.0).max() < 0.15
+    raw = sample_flow(model, n=3000, k=2, steps=100, t_end=0.9, rescale=False)
+    # unrescaled is shrunk by t_end, which is what rescale undoes
+    assert np.abs(raw.std(0) / (0.9 * full.std(0)) - 1.0).max() < 0.15
+
+
+# --------------------------------------------------------------------------- #
+# RhoBasis                                                                    #
+# --------------------------------------------------------------------------- #
+
+def _bottles(n=6, subdiv=2):
+    from bottlegen import codec
+    from bottlegen.data.dataset import demo_bottle_meshes
+    ms = demo_bottle_meshes(n=n, subdiv=subdiv, seed=0)
+    return (np.stack([m.vertices for m in ms]), ms[0].faces,
+            codec.template_sphere(subdiv))
+
+
+def test_rho_codes_are_whitened_band_wise():
+    """Each BAND must pool to unit variance — the invariant RhoBasis actually
+    provides, and the one the flow's unweighted MSE needs.
+
+    Regression test for a real bug: the scale was pooled over *uncentred*
+    coefficients, which folds the spread of the per-coefficient means into it,
+    over-estimates it, and left per-band std at 0.25 instead of 1. The flow then
+    under-weights those bands for precisely the reason whitening exists. Unit std
+    per *coefficient* is NOT the invariant — within a band the spread is signal.
+    """
+    from bottlegen import codec
+    X, F, S = _bottles()
+    L = 6
+    b = RhoBasis.fit(X, F, L, S)
+    Z = b.encode(X)
+    bi = codec.band_index(L)
+    per_band = np.array([Z[:, bi == l].std() for l in range(L + 1)])
+    print(f"[rho whitening] per-band std in "
+          f"[{per_band.min():.4f}, {per_band.max():.4f}]")
+    assert np.abs(Z.mean(0)).max() < 1e-10
+    assert np.abs(per_band - 1.0).max() < 1e-10
+
+
+def test_rho_fields_are_bandwidth_independent():
+    """ρ_direct does not depend on L, so one field set serves every bandwidth.
+
+    That is what makes an L-sweep affordable — otherwise each bandwidth repeats
+    the per-mesh edge least squares, which is the expensive part.
+    """
+    X, F, S = _bottles()
+    fields = RhoBasis(S, F, L=1).rho_fields(X)
+    for L in (4, 8):
+        a = RhoBasis.fit(X, F, L, S, fields=fields)
+        b = RhoBasis.fit(X, F, L, S)
+        assert np.allclose(a.encode(X, fields=fields), b.encode(X), atol=1e-12)
+
+
+def test_rho_fields_refuse_the_adjoint():
+    """The adjoint's ρ *is* fitted at a specific bandwidth, so reusing it across L
+    would be silently wrong. Refuse rather than return something plausible."""
+    X, F, S = _bottles(n=2)
+    with pytest.raises(ValueError, match="(?i)direct"):
+        RhoBasis(S, F, L=4, method="adjoint").rho_fields(X)
+
+
+def test_rho_is_rotation_invariant():
+    """ρ̂ on a shared template does not see rotation: H is rotation-invariant and
+    e^u comes from edge lengths. This contradicts the warning in codec.py, which
+    applies to unregistered data where each shape gets its own sphere — so it is
+    worth pinning before anything relies on it."""
+    X, F, S = _bottles(n=3)
+    b = RhoBasis.fit(X, F, 6, S)
+    rng = np.random.default_rng(0)
+    Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
+    if np.linalg.det(Q) < 0:
+        Q[:, 0] *= -1
+    z0, z1 = b.encode(X), b.encode(X @ Q)
+    rel = np.linalg.norm(z0 - z1) / np.linalg.norm(z0)
+    print(f"[rho rotation] rel change under a random rotation {rel:.2e}")
+    assert rel < 1e-9

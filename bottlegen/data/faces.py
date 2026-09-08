@@ -1,10 +1,24 @@
-"""Smoothed-head dataset from FaceScape ``models_reg``, for position models.
+"""Smoothed-head dataset from FaceScape ``models_reg``.
 
-This is deliberately **not** the ρ-codec path. That path caps the four boundary
-loops so cMCF and the Dirac solve have a closed genus-0 surface; a model over
-vertex positions needs none of that, and the caps are invented geometry — the
-neck opening alone is a 168 mm hole closed by a single centroid fan. So this
-loader skips them.
+Serves both representations, and they want different preprocessing:
+
+===============  ==================  ==================================
+stage            positions (PCA)     ρ̂ (spin codec)
+===============  ==================  ==================================
+``cap``          off                 **on** — cMCF, the Dirac eigensolve
+                                     and the cotan-Poisson integration
+                                     are undefined with boundary
+``align``        on (worth 5-7%)     **off** — ρ is exactly
+                                     rotation-invariant on a shared
+                                     template, measured 4e-15, so
+                                     aligning is pure cost
+``smooth``       on                  **on**, and it matters more: H is a
+                                     second derivative, so it amplifies
+                                     scan noise by ~ℓ²
+===============  ==================  ==================================
+
+The caps are invented geometry — the neck opening alone is a 168 mm hole closed
+by a single centroid fan — which is why they are off unless ρ asks for them.
 
 What the meshes actually are: a **full head**, not a face mask — bbox 209 x 275
 x 209 mm, so as deep as it is wide, with cranium, ears and a neck stub. Four
@@ -39,13 +53,13 @@ import scipy.sparse.linalg as spla
 
 from ..geom.mesh import Mesh
 from ..geom.operators import cotan_laplacian
-from .registered import read_obj
+from .registered import apply_caps, boundary_loops, fill_holes, read_obj
 
 __all__ = ["load_heads", "procrustes_align", "laplacian_smooth", "build_dataset"]
 
 
-def load_heads(roots, expression: str = "1_neutral", limit: int | None = None,
-               normalise: bool = True, verbose: bool = False):
+def load_heads(roots, expressions="1_neutral", limit: int | None = None,
+               normalise: bool = True, cap: bool = False, verbose: bool = False):
     """Load FaceScape ``models_reg`` heads from one or several dataset roots.
 
     ``roots`` is a path or an iterable of paths — FaceScape ships its ~450
@@ -54,43 +68,72 @@ def load_heads(roots, expression: str = "1_neutral", limit: int | None = None,
     That is *checked* here rather than assumed: a mismatch would silently make
     the codes mean different things per subject.
 
-    Subjects missing ``expression`` are skipped (446 of 447 have ``1_neutral``).
+    ``expressions`` is one name or a sequence of them; each (subject, expression)
+    pair becomes one sample. FaceScape ships **20 expressions per subject**, so
+    446 x 20 is ~8 900 meshes against 446 — by far the largest data lever
+    available, and the difference between a code space this dataset can pin and
+    one it cannot. Two caveats, both real:
+
+    * expressions of one subject are strongly correlated, so the *effective*
+      sample size is well below the count;
+    * the mouth cap is invented geometry whose boundary moves with expression, so
+      on a multi-expression set it enters the codes looking like measured shape.
+      Consider excluding the extreme mouth expressions.
+
+    Subjects missing an expression are skipped (446 of 447 have ``1_neutral``).
 
     ``normalise`` centres each head and scales it to unit mean radius. Do not
     read that as alignment — it fixes translation and scale only, and ~13.5% of
     the remaining spread is head pose. Run :func:`procrustes_align` for that.
+
+    ``cap`` closes the four boundary loops with centroid fans. **Required for the
+    ρ codec** — cMCF, the Dirac eigensolve and the cotan-Poisson integration are
+    all undefined with boundary — and pointless for a position model, which is
+    why it is off by default. The cap face list is computed once from the first
+    mesh and replayed on every other, so the set stays registered; only the four
+    centroids move. Note the mouth cap is invented geometry whose boundary shifts
+    with expression, so on a multi-expression set it enters the codes looking
+    like measured shape.
     """
     roots = [Path(roots)] if isinstance(roots, (str, Path)) else [Path(r) for r in roots]
+    exprs = [expressions] if isinstance(expressions, str) else list(expressions)
     out, F0, skipped = [], None, 0
+    loops = added = None
     for root in roots:
         subs = sorted((d for d in root.iterdir() if d.is_dir()),
                       key=lambda d: (len(d.name), d.name))
         for d in subs:
-            if limit is not None and len(out) >= limit:
-                break
-            path = d / "models_reg" / f"{expression}.obj"
-            if not path.exists():
-                skipped += 1
-                continue
-            V, F = read_obj(path)
-            if F0 is None:
-                F0 = F
-            elif not np.array_equal(F, F0):
-                raise ValueError(
-                    f"{path}: connectivity differs from the first mesh loaded — "
-                    f"the set is not template-registered, and concatenating these "
-                    f"roots would produce codes that mean different things")
-            if normalise:
-                V = V - V.mean(0)
-                V = V / np.linalg.norm(V, axis=1).mean()
-            out.append(Mesh(V, F0))
-            if verbose:
-                print(f"  {root.name}/{d.name}  V={len(V)}", flush=True)
+            for expr in exprs:
+                if limit is not None and len(out) >= limit:
+                    break
+                path = d / "models_reg" / f"{expr}.obj"
+                if not path.exists():
+                    skipped += 1
+                    continue
+                V, F = read_obj(path)
+                if cap:
+                    if loops is None:           # cap combinatorics: compute once
+                        loops = boundary_loops(F)
+                        _, _, added = fill_holes(V, F, loops)
+                    V, F = apply_caps(V, F, loops, added)
+                if F0 is None:
+                    F0 = F
+                elif not np.array_equal(F, F0):
+                    raise ValueError(
+                        f"{path}: connectivity differs from the first mesh loaded "
+                        f"— the set is not template-registered, and concatenating "
+                        f"these would produce codes that mean different things")
+                if normalise:
+                    V = V - V.mean(0)
+                    V = V / np.linalg.norm(V, axis=1).mean()
+                out.append(Mesh(V, F0))
+                if verbose:
+                    print(f"  {root.name}/{d.name}/{expr}  V={len(V)}", flush=True)
     if not out:
         raise FileNotFoundError(
-            f"no {expression}.obj under {[str(r) for r in roots]}/*/models_reg/")
+            f"no {exprs} .obj under {[str(r) for r in roots]}/*/models_reg/")
     if verbose and skipped:
-        print(f"  ({skipped} subject(s) had no {expression}.obj)", flush=True)
+        print(f"  ({skipped} subject/expression pair(s) missing)", flush=True)
     return out
 
 
@@ -136,15 +179,21 @@ def laplacian_smooth(V: np.ndarray, F: np.ndarray, t: float = 1e-3) -> np.ndarra
     return np.stack([solve(M @ V[:, k]) for k in range(3)], axis=1)
 
 
-def build_dataset(roots, expression: str = "1_neutral", t_smooth: float = 1e-3,
-                  align: bool = True, limit: int | None = None,
+def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
+                  align: bool = True, cap: bool = False, limit: int | None = None,
                   verbose: bool = False):
     """``roots -> (X (N,n,3), F)``: loaded, aligned, smoothed heads.
 
     ``t_smooth=0`` skips smoothing, which is measurably the wrong choice — see
     the module docstring — but is left reachable so the difference stays testable.
+
+    ``cap=True`` for the ρ codec, which needs a closed surface. ``align`` is worth
+    5-7% for a position basis and is **pure cost for ρ**, which is exactly
+    rotation-invariant on a shared template (measured 4e-15) — so pass
+    ``align=False`` there.
     """
-    meshes = load_heads(roots, expression=expression, limit=limit, verbose=verbose)
+    meshes = load_heads(roots, expressions=expressions, limit=limit, cap=cap,
+                        verbose=verbose)
     F = meshes[0].faces
     X = np.stack([m.vertices for m in meshes])
     if verbose:
