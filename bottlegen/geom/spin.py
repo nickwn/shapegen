@@ -47,30 +47,23 @@ def base_sphere_residual(sph, faces) -> float:
     support the curvature operator, and **every** rho computed on that sphere
     carries the same spurious field as a fixed additive offset.
 
-    This is not hypothetical. The cMCF sphere of a FaceScape head has 2.1e6x
-    triangle-area spread; this test returns **8.54** on it against 0.004 for an
-    icosphere. Measured consequences on real faces at L=16: reconstruction 0.0932
-    on that sphere against **0.0395** on an icosphere resampling of the same
-    heads, and a known band-limited rho recovered with 314% coefficient error
-    instead of 3.6%.
+    **Read this number as a discretisation warning, not as a verdict.** The cMCF
+    sphere of a FaceScape head scores 8.54 against an icosphere's 0.004, and that
+    correctly says its triangulation cannot support the curvature operator
+    pointwise (2.1e6x triangle-area spread, areas to 3.4e-9, so the Dirac
+    assembly's ``-e_p e_q / (4 A_f)`` reaches 7.4e7). But it does **not** follow
+    that the sphere is unusable, and an earlier version of this docstring said so
+    on the strength of this test alone. Measured end to end against the original
+    heads, decoding on that same cMCF sphere reconstructs at 0.047-0.060 across
+    L=8..32 — perfectly serviceable. Resampling onto a uniform icosphere is worth
+    about **27%** (0.0357 vs 0.0489 at L=16), not the 2.4x first claimed; that
+    figure came from scoring the icosphere route against the *resampled* head,
+    which is a coarser and therefore easier target.
 
-    **How the damage actually reaches the pipeline**, since the obvious guess is
-    wrong: ``mesh_to_rho_direct`` computes ``H`` on the *target* mesh, never on the
-    sphere, so "H is broken on the sphere" is not the mechanism even though this
-    test exposes it that way. The two paths that do bite are
-
-    * the **decode and the projection**, which divide by sphere areas — the Dirac
-      assembly's ``-e_p e_q / (4 A_f)`` reaches ``1/(4A) = 7.4e7`` at ``A = 3.4e-9``,
-      and ``sh_project``'s Galerkin mass spans the same 1e6x;
-    * ``H`` on the **head**, which on FaceScape's own triangulation ranges over
-      [-1971, +1229] with rms 4.2 — small triangles in the source mesh, unrelated
-      to the sphere.
-
-    ``u`` is *not* damaged (range [-0.61, 2.90]): ``u_edge_lsq`` is a least-squares
-    fit and smooths over the degenerate edges.
-
-    Resampling onto a uniform icosphere fixes both paths at once, which is why the
-    end-to-end gain is larger than either alone would suggest.
+    Note also that this test probes a path the codec does not take:
+    ``mesh_to_rho_direct`` computes ``H`` on the *target* mesh, never on the
+    sphere. What the sphere's conditioning actually governs is the decode and the
+    Galerkin projection.
 
     Guideline: below ~0.05 is fine (an icosphere gives 0.004 at subdiv 5); above
     ~0.5 the sphere is unusable and no amount of bandwidth will help, because the
