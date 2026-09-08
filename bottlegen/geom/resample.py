@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import numpy as np
 
-__all__ = ["locate_on_sphere", "resample_to"]
+__all__ = ["locate_on_sphere", "locate_on_mesh", "resample_to"]
 
 
 def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8):
@@ -88,6 +88,44 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
     w = np.where(bad[:, None], 1.0 / 3.0, w / np.where(np.abs(s) < 1e-12, 1.0, s))
     return idx, np.clip(w, 0.0, None) / np.maximum(
         np.clip(w, 0.0, None).sum(1, keepdims=True), 1e-30), int(bad.sum())
+
+
+def locate_on_mesh(V: np.ndarray, F: np.ndarray, pts: np.ndarray):
+    """Nearest-point barycentric location of ``pts`` on the surface ``(V, F)``.
+
+    The **non-radial** companion to :func:`locate_on_sphere`. Use it for
+    surface-to-surface transfer, where the query points already lie on (or very
+    near) the surface and "closest point" is the right answer — locating a
+    remeshed copy's vertices back on the original, for instance.
+
+    :func:`locate_on_sphere` must not be used for that: it projects radially from
+    the origin, which is only meaningful when the surface is a sphere centred
+    there.
+
+    Returns ``(idx (m,), bary (m,3), max_dist)``. ``max_dist`` is how far the
+    farthest query sat from the surface — for a remesh of the same shape it should
+    be at the scale of the remesh error, and anything larger means the two meshes
+    are not the same surface.
+    """
+    import igl  # noqa: PLC0415
+
+    V = np.asarray(V, dtype=float)
+    F = np.asarray(F, dtype=np.int64)
+    pts = np.asarray(pts, dtype=float)
+    d2, idx, C = igl.point_mesh_squared_distance(pts, V, F)
+    idx = np.asarray(idx, dtype=np.int64).ravel()
+    a, b, c = V[F[idx, 0]], V[F[idx, 1]], V[F[idx, 2]]
+    v0, v1, v2 = b - a, c - a, C - a
+    d00 = (v0 * v0).sum(1)
+    d01 = (v0 * v1).sum(1)
+    d11 = (v1 * v1).sum(1)
+    den = d00 * d11 - d01 * d01
+    den = np.where(np.abs(den) < 1e-30, 1e-30, den)
+    w1 = (d11 * (v2 * v0).sum(1) - d01 * (v2 * v1).sum(1)) / den
+    w2 = (d00 * (v2 * v1).sum(1) - d01 * (v2 * v0).sum(1)) / den
+    w = np.clip(np.stack([1.0 - w1 - w2, w1, w2], axis=1), 0.0, None)
+    w /= np.maximum(w.sum(1, keepdims=True), 1e-30)
+    return idx, w, float(np.sqrt(np.asarray(d2).max()))
 
 
 def resample_to(S, F, X, dirs):

@@ -54,6 +54,9 @@ def main():
     ap.add_argument("--t-smooth", type=float, default=1e-3)
     ap.add_argument("--base", choices=("icosphere", "native"), default="icosphere")
     ap.add_argument("--subdiv", type=int, default=6)
+    ap.add_argument("--remesh", type=float, default=0.8,
+                    help="isotropic remesh target %% of bbox diagonal before "
+                         "cMCF; 0 disables. Worth 25-32%% of reconstruction.")
     ap.add_argument("--out", default="reports/faces/rho_cache.npz")
     a = ap.parse_args()
 
@@ -65,7 +68,8 @@ def main():
     t0 = time.perf_counter()
     out = faces.build_dataset(roots, expressions=a.expressions,
                               t_smooth=a.t_smooth, cap=True, align=False,
-                              base=a.base, subdiv=a.subdiv, limit=a.limit,
+                              base=a.base, subdiv=a.subdiv,
+                              remesh=(a.remesh or None), limit=a.limit,
                               verbose=True)
     if a.base == "icosphere":
         X, F, sphere = out

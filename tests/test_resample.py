@@ -93,3 +93,46 @@ def test_resampling_preserves_a_smooth_shape():
     print(f"[shape] mean distance from the resampled surface to the source "
           f"{d:.5f} (source edge ~{np.sqrt(4 * np.pi / len(S)):.4f})")
     assert d < 0.5 * np.sqrt(4 * np.pi / len(S))
+
+
+def test_locate_on_mesh_is_exact_on_self():
+    """Locating a mesh's own vertices on itself must be exact.
+
+    The nearest-point companion to `locate_on_sphere`, used for surface-to-surface
+    transfer (a remeshed copy back onto the original). If this drifts, the
+    composed remesh -> icosphere transfer in `faces.build_dataset` silently moves
+    every vertex.
+    """
+    from bottlegen.geom.resample import locate_on_mesh
+    V, F = _unit(3)
+    idx, w, dmax = locate_on_mesh(V, F, V)
+    rec = (V[F[idx]] * w[:, :, None]).sum(1)
+    print(f"[self-location] max dist {dmax:.2e}, reconstruction {np.abs(rec - V).max():.2e}")
+    assert dmax < 1e-12
+    assert np.abs(rec - V).max() < 1e-12
+    assert np.abs(w.sum(1) - 1.0).max() < 1e-12
+
+
+def test_composed_transfer_preserves_the_surface():
+    """remesh -> cMCF -> icosphere composes TWO barycentric transfers. Their
+    product must still be a partition of unity and land on the original surface.
+
+    Remeshing breaks the registered correspondence outright; composing restores a
+    shared topology. If the weights stopped summing to 1, every head would be
+    silently scaled toward the origin, which no shape-error metric would flag
+    because Procrustes removes scale.
+    """
+    from bottlegen.geom.resample import locate_on_mesh, locate_on_sphere
+    V, F = _unit(3)                      # stand-in for the "head"
+    M, FM = _unit(4)                     # stand-in for its remesh
+    P, _ = _unit(2)                      # icosphere directions
+    iW, W, dmax = locate_on_mesh(V, F, M)
+    iV, Vw, nf = locate_on_sphere(M, FM, P)
+    tri = FM[iV]
+    f9, w9 = F[iW[tri]], Vw[:, :, None] * W[tri]
+    print(f"[composed] transfer err {dmax:.2e}, fallbacks {nf}, "
+          f"weight sum dev {np.abs(w9.sum((1, 2)) - 1.0).max():.2e}")
+    assert np.abs(w9.sum((1, 2)) - 1.0).max() < 1e-10, "not a partition of unity"
+    out = (V[f9] * w9[:, :, :, None]).sum((1, 2))
+    # the source is a unit sphere, so the composed result must be on it too
+    assert np.abs(np.linalg.norm(out, axis=1) - 1.0).max() < 0.02

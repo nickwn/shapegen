@@ -116,7 +116,7 @@ def main():
         out = faces.build_dataset(roots, t_smooth=a.t_smooth, limit=a.limit,
                                   cap=rho, align=not rho,
                                   base="icosphere" if rho else "native",
-                                  verbose=True)
+                                  remesh=0.8 if rho else None, verbose=True)
         X, F, sph = out if rho else (*out, None)
     n_hold = min(a.holdout, len(X) // 4)
     Xtr, Xte = X[:-n_hold], X[-n_hold:]
@@ -180,7 +180,8 @@ def main():
     if a.t_smooth > 0:
         ro = faces.build_dataset(roots, t_smooth=0.0, limit=a.limit, cap=rho,
                                  align=not rho,
-                                 base="icosphere" if rho else "native")
+                                 base="icosphere" if rho else "native",
+                                 remesh=0.8 if rho else None)
         Xr = ro[0]
         fr = RhoBasis(sph, F, L=1).rho_fields(Xr) if rho else None
         br, _, _ = build_basis(a.basis, Xr[:-n_hold], F, a.k, a.L, sphere=sph,

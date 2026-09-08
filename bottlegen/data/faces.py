@@ -55,7 +55,8 @@ from ..geom.mesh import Mesh
 from ..geom.operators import cotan_laplacian
 from .registered import apply_caps, boundary_loops, fill_holes, read_obj
 
-__all__ = ["load_heads", "procrustes_align", "laplacian_smooth", "build_dataset"]
+__all__ = ["load_heads", "procrustes_align", "laplacian_smooth",
+           "isotropic_remesh", "build_dataset"]
 
 
 def load_heads(roots, expressions="1_neutral", limit: int | None = None,
@@ -179,10 +180,45 @@ def laplacian_smooth(V: np.ndarray, F: np.ndarray, t: float = 1e-3) -> np.ndarra
     return np.stack([solve(M @ V[:, k]) for k in range(3)], axis=1)
 
 
+def isotropic_remesh(V, F, target_pct: float = 0.8, iterations: int = 6):
+    """Isotropic explicit remeshing via pymeshlab. Returns ``(V2, F2)``.
+
+    FaceScape's registered mesh is badly shaped — min angle **0.04°** with 24.9%
+    of triangles under 20° — and cMCF carries that faithfully onto the sphere.
+    Remeshing attacks the source: measured at ``target_pct=0.8``, min angle rises
+    to 0.49°, triangles under 20° fall to **0.5%**, and the resulting conformal map
+    is far better, **qc 0.0059 against 0.03**.
+
+    **It does not fix the sphere, and on its own it makes things worse.** A uniform
+    head maps to a sphere with 1.4e8 area spread (the source mesh gave 2.1e6),
+    because a conformal map cannot be uniform on both sides — that is what
+    conformal area distortion *is*. Encoding on that sphere reconstructs at
+    0.054-0.067 against the icosphere route's 0.034-0.037. So remeshing belongs
+    *before* the resampling, never instead of it.
+
+    ``target_pct`` is a percentage of the bounding-box diagonal. Smaller means more
+    vertices: 0.8 gives ~17k from FaceScape's 26k, 0.5 gives ~45k.
+
+    Note this **breaks the registered correspondence** — the output is a new vertex
+    set. :func:`build_dataset` restores a shared topology afterwards by composing
+    the remesh's barycentric weights with the icosphere resampling's.
+    """
+    import pymeshlab  # noqa: PLC0415
+    ms = pymeshlab.MeshSet()
+    ms.add_mesh(pymeshlab.Mesh(vertex_matrix=np.asarray(V, dtype=float),
+                               face_matrix=np.asarray(F, dtype=np.int32)))
+    ms.meshing_isotropic_explicit_remeshing(
+        iterations=iterations,
+        targetlen=pymeshlab.PercentageValue(target_pct))
+    m = ms.current_mesh()
+    return (np.asarray(m.vertex_matrix(), dtype=float),
+            np.asarray(m.face_matrix(), dtype=np.int64))
+
+
 def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
                   align: bool = True, cap: bool = False, base: str = "native",
-                  subdiv: int = 6, limit: int | None = None,
-                  verbose: bool = False):
+                  subdiv: int = 6, remesh: float | None = None,
+                  limit: int | None = None, verbose: bool = False):
     """``roots -> (X (N,n,3), F)``: loaded, aligned, smoothed heads.
 
     ``t_smooth=0`` skips smoothing, which is measurably the wrong choice — see
@@ -218,12 +254,38 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
 
     from .. import codec  # noqa: PLC0415
     from ..geom.mesh import icosphere  # noqa: PLC0415
-    from ..geom.resample import resample_to  # noqa: PLC0415
-    S = codec.base_sphere(Mesh(X.mean(0), F))       # correspondence, used once
+    from ..geom.resample import locate_on_mesh, locate_on_sphere  # noqa: PLC0415
+
     ico = icosphere(subdiv)
     P = ico.vertices / np.linalg.norm(ico.vertices, axis=1, keepdims=True)
-    Xr, _, _, nf = resample_to(S, F, X, P)
+    mean = X.mean(0)
+
+    if remesh is None:
+        # icosphere directions -> the mean head's own cMCF sphere -> the heads
+        S = codec.base_sphere(Mesh(mean, F))
+        idx, bary, nf = locate_on_sphere(S, F, P)
+        Xr = np.stack([(x[F[idx]] * bary[:, :, None]).sum(1) for x in X])
+    else:
+        # Remesh first, for a better-conditioned cMCF and a more conformal map,
+        # then compose the two transfers so every head still lands on ONE
+        # icosphere. Remeshing alone would break the shared topology the codes
+        # depend on; composing restores it.
+        M, FM = isotropic_remesh(mean, F, target_pct=remesh)
+        iW, W, dmax = locate_on_mesh(mean, F, M)    # M's vertices, back onto F
+        S = codec.base_sphere(Mesh(M, FM))          # cMCF of the REMESHED mean
+        iV, V, nf = locate_on_sphere(S, FM, P)      # icosphere dirs, onto M
+        if verbose:
+            print(f"remeshed mean {len(mean)} -> {len(M)} verts "
+                  f"(target {remesh}%), transfer error {dmax:.2e}", flush=True)
+        # Compose: direction -> 3 verts of M -> 9 verts of F, weights multiplied.
+        # direction j -> 3 verts of M (weights V) -> each of those -> 3 verts of
+        # F (weights W). Nine source vertices per direction, weights multiplied.
+        # They still sum to 1: sum_a V[j,a] * sum_k W[.,k] = sum_a V[j,a] = 1.
+        tri = FM[iV]                                # (m,3) vertex ids in M
+        f9 = F[iW[tri]]                             # (m,3,3) vertex ids in F
+        w9 = V[:, :, None] * W[tri]                 # (m,3,3)
+        Xr = np.stack([(x[f9] * w9[:, :, :, None]).sum((1, 2)) for x in X])
     if verbose:
         print(f"resampled onto icosphere subdiv {subdiv}: {len(P)} verts, "
-              f"{nf} nearest-vertex fallbacks", flush=True)
+              f"{nf} fallbacks", flush=True)
     return Xr, ico.faces, P
