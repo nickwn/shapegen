@@ -165,3 +165,61 @@ def test_parallel_encode_matches_serial():
     for i, m in enumerate(meshes):
         solo = codec.encode(m, L=4, sphere=T, method="direct").coeffs
         assert np.abs(b[i] - solo).max() < 1e-8
+
+
+def test_chamfer_scale_align_is_vertex_count_independent():
+    """``scale_align`` must normalise by RMS radius, not by the raw sum.
+
+    Regression: it used ``sqrt(sum(B**2)/sum(A**2))``, which scales with the
+    VERTEX COUNT. Two unit spheres at 10242 and 40962 vertices scored 0.99999 --
+    the smaller was scaled by 2.0 -- instead of 0.00708. It went unnoticed because
+    with equal counts the two forms agree, and that is the only case the codec
+    itself uses. It breaks precisely where chamfer is otherwise the right tool:
+    comparing decodes on differently-sized meshes.
+    """
+    from bottlegen.eval.metrics import chamfer
+    from bottlegen.geom.mesh import icosphere
+    u = lambda s: (lambda m: m.vertices / np.linalg.norm(  # noqa: E731
+        m.vertices, axis=1, keepdims=True))(icosphere(s))
+    A, B = u(4), u(5)
+    plain = chamfer(A, B)
+    assert chamfer(A, B, scale_align=True) == pytest.approx(plain, rel=1e-9)
+    # and it still does its job: a pure rescale must be removed
+    assert chamfer(A * 3.0, A, scale_align=True) < 1e-12
+
+
+def test_decode_is_mesh_independent_when_rho_is_realisable():
+    """The contract behind "encode to SH, decode from SH": ρ̂ is a function on S²,
+    so decoding it on ANY sphere mesh gives the same surface.
+
+    That holds exactly while ρ is **realisable**. When γ > 0 no immersion has that
+    ρ, the eigensolve returns a least-squares fit, and which fit depends on the
+    quadrature — so the decode stops being a function of the coefficients alone.
+    Measured on a face at L=16: γ=4.6e-13 gives cross-mesh agreement at the
+    vertex-spacing floor, while γ=2.2e-2 puts it 0.057 above.
+    """
+    from scipy.spatial import cKDTree
+    from bottlegen.geom.mesh import icosphere
+    from bottlegen.geom.operators import vertex_areas
+
+    def norm_shape(V, F):
+        w = vertex_areas(V, F)
+        w = w / w.sum()
+        V = V - (w[:, None] * V).sum(0)
+        return V / np.sqrt((w * (V ** 2).sum(1)).sum())
+
+    def cham(A, B):
+        return 0.5 * (cKDTree(B).query(A)[0].mean() + cKDTree(A).query(B)[0].mean())
+
+    a, b = icosphere(3), icosphere(4)
+    Pa = a.vertices / np.linalg.norm(a.vertices, axis=1, keepdims=True)
+    Pb = b.vertices / np.linalg.norm(b.vertices, axis=1, keepdims=True)
+    floor = cham(norm_shape(Pa, a.faces), norm_shape(Pb, b.faces))
+
+    rng = np.random.default_rng(0)
+    c = np.zeros(codec.n_coeffs(4))
+    c[1:9] = 0.02 * rng.standard_normal(8)          # small => nearly realisable
+    Xa = norm_shape(codec.decode(c, Pa, a.faces), a.faces)
+    Xb = norm_shape(codec.decode(c, Pb, b.faces), b.faces)
+    print(f"[mesh-independence] floor {floor:.5f}, with rho {cham(Xa, Xb):.5f}")
+    assert cham(Xa, Xb) < floor * 1.15

@@ -38,11 +38,27 @@ def genus(V, F) -> int:
 
 def chamfer(A, B, scale_align=False) -> float:
     """Symmetric Chamfer (mean nearest-neighbor distance). ``scale_align``
-    removes the global scale gauge (the decode fixes scale only up to |λ|²)."""
+    removes the global scale gauge (the decode fixes scale only up to |λ|²).
+
+    Unlike a Procrustes error this is **topology-free**, so it is the right metric
+    for comparing meshes with different vertex counts — a decode on an icosphere
+    against one on a cMCF sphere, say.
+
+    ``scale_align`` normalises by RMS radius. It used to use the raw sums, which
+    is **vertex-count dependent** and therefore wrong for exactly the case this
+    function is otherwise good at: two unit spheres with 10242 and 40962 vertices
+    scored 0.99999 (the smaller was scaled by 2.0) instead of 0.00708. With equal
+    counts the two agree, which is why it went unnoticed.
+
+    Note ``A.mean(0)`` is the vertex mean, not the area-weighted centroid, so on a
+    badly non-uniform mesh the centring is itself off — the cMCF sphere of a head
+    has 1e6x area spread and a vertex mean 0.35 from its centre. Pass clouds you
+    have centred yourself if that matters.
+    """
     A = A - A.mean(0)
     B = B - B.mean(0)
     if scale_align:
-        A = A * np.sqrt((B ** 2).sum() / max((A ** 2).sum(), 1e-30))
+        A = A * np.sqrt((B ** 2).mean() / max((A ** 2).mean(), 1e-30))
     da, _ = cKDTree(B).query(A)
     db, _ = cKDTree(A).query(B)
     return 0.5 * (da.mean() + db.mean())
