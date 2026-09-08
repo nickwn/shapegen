@@ -145,7 +145,13 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     error in ``u`` — and that is worth fixing before leaning on this default for
     scanned data.
 
-    **For ``direct``, ``L`` is a regularisation parameter, not a fidelity knob.**
+    **For ``direct``, ``L`` is a regularisation parameter, not a fidelity knob** —
+    and that is a fact about *this estimator*, not about ρ̂. With ``adjoint`` the
+    error falls **monotonically** with bandwidth, as one would expect: on a
+    FaceScape head against a shared template, 0.056 (L=8) → 0.043 (L=12) → 0.035
+    (L=16), against ``direct``'s 0.092 / 0.090 / 0.088 on the same heads. Do not
+    read the paragraph below as a limit of the representation; it is a limit of a
+    biased local measurement.
     Measured on a bottle at subdiv 3: 0.115 (L=4), **0.054 (L=8)**, 0.064 (L=12),
     0.062 (L=16), 0.0641 (L=24) — and decoding ρ_direct with *no band limit at
     all* gives 0.0641 to five digits. So nothing runs away; the curve converges to
@@ -157,10 +163,11 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     with bandwidth (1.5e-3 at L=4 to 3.7e-2 unlimited, at subdiv 4) — each extra
     band makes ρ *less* realisable as any surface's curvature half-density.
 
-    Consequence: **choose L by validation, and re-choose it per resolution.** The
-    optimum moves — L=8 at subdiv 3-4, L=12 at subdiv 5 — because it tracks the
-    discretisation floor, not the shape. A pipeline that treats more bandwidth as
-    better will silently pick the wrong one.
+    Consequence for ``direct``: **choose L by validation, and re-choose it per
+    resolution.** The optimum moves — L=8 at subdiv 3-4, L=12 at subdiv 5 —
+    because it tracks the discretisation floor, not the shape. If you want
+    accuracy to keep improving with bandwidth, use ``adjoint``; that is the axis
+    it wins on, and it is worth 2.5x at L=16 on a face.
 
     A third encoder, ``"lambda"`` (read λ off the correspondence, least-squares ρ
     against the Dirac energy), was removed: ``direct`` beat it by 20-35% at every

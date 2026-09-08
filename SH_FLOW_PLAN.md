@@ -24,11 +24,24 @@ On faces, ρ̂ is measurably a worse representation than PCA over positions:
 | ρ̂, **direct**, one shared template (what this plan uses) | 169 (L=12) | **0.103** |
 | ρ̂, adjoint, L=32, the head's *own* cMCF sphere | 1089 | 0.0209 |
 
-**RESULT.** The shared-template penalty is now measured, not predicted: 400
-subjects, L-sweep 0.133 (L=4), 0.109 (L=8), **0.103 (L=12)**, 0.107 (L=16). So the
-generative model inherits a ~0.10 ceiling — 18x the PCA figure — and the peak at
-L=12 is the same non-monotonicity `direct` shows everywhere, so **more bandwidth
-does not help**.
+**RESULT — and a correction.** With `direct`, the shared-template L-sweep is
+0.133 (L=4), 0.109 (L=8), **0.103 (L=12)**, 0.107 (L=16), degrading to 0.121 at
+L=40 and **0.348** with no band limit at all. I read that as "more bandwidth does
+not help" and generalised it to the representation. **That was wrong.**
+
+The same heads, same shared template, with the **adjoint** encoder:
+
+| L | direct | adjoint |
+|---|---|---|
+| 8 | 0.09201 | **0.05616** |
+| 12 | 0.09044 | **0.04345** |
+| 16 | 0.08753 | **0.03512** |
+
+**Monotone in L, and 2.5x better than `direct` at L=16** — every one of those
+iteration-capped, so they are upper bounds. Bandwidth *does* buy accuracy. The
+non-monotonicity belongs to `direct`, whose bias lives in the high bands, and not
+to ρ̂. The ceiling in this table is an artefact of the encoder this plan chose for
+cost reasons, not a property of the representation.
 
 The reason to do it anyway is real: **ρ̂ needs no correspondence.** PCA over
 positions only exists because FaceScape ships registered meshes. ρ̂ works on any
@@ -351,9 +364,11 @@ until re-run with a bigger budget.
 **The decisive result is visual, not numeric.** Rendering real → ρ̂ round trip →
 generated side by side: **the round trip already loses the ears and most identity
 detail.** The generated heads are about as good as the round trips. So the flow is
-*not* the bottleneck — the 0.103 representation ceiling is, and it is visible
-rather than merely tabulated. More bandwidth does not help: L=16 (0.107) is worse
-than L=12 (0.103).
+*not* the bottleneck — the round-trip ceiling is.
+
+**But that ceiling is the `direct` encoder's, not ρ̂'s** (see §1). The adjoint
+reaches 0.035 at L=16 against direct's 0.088, monotonically in L. Everything below
+about "accepting a blurrier model" was written against the wrong ceiling.
 
 **A check-design flaw worth carrying forward.** Checks 5 and 6 failed and passed
 together across every configuration, which is the signature of one measurement
@@ -388,12 +403,25 @@ The fallback is not defeat: neutral-only at L=8 with §4(b)+(c), accepting a
 blurrier model, still demonstrates the full path end to end and is the thing to
 generalise to unregistered shapes.
 
-**RESULT: that is where this landed, and it is the honest read.** The full path
-runs, samples are valid genus-0 heads with matching γ, and they look like heads.
-They also look like *the same* head, because L=12 through a shared template cannot
-carry identity — the round trip proves that before the flow is involved. The next
-move is therefore **not** a better generative model. It is either §4(a) at full
-scale (8 900 meshes, now affordable) to see whether more data widens the code
-distribution, or accepting that ρ̂-on-a-shared-template is the wrong ceiling for
-faces and that this pipeline's value is on unregistered shapes, where PCA is not
-available at all.
+**RESULT.** The full path runs, samples are valid genus-0 heads with matching γ,
+and they look like heads. They also look like *the same* head — but the cause is
+now identified and it is fixable.
+
+**The next move is a better encoder, not a better generative model, and not more
+data.** The adjoint reaches 0.035 at L=16 where `direct` sits at 0.088, and unlike
+`direct` it keeps improving with bandwidth. The plan chose `direct` because the
+adjoint was budgeted at 321-376 s/head; that is still true (≈450 s at L=16), which
+puts 400 subjects at **50 hours** — long, but a one-off, embarrassingly parallel
+(`n_jobs` is implemented), and cached forever afterwards. At 8 cores it is an
+overnight job. That is the single highest-value thing left.
+
+Only after that is it worth asking whether §4(a)'s extra data widens the code
+distribution, or whether ρ̂-on-a-shared-template is simply the wrong ceiling for
+faces.
+
+**A methodological note worth keeping.** `direct`'s non-monotonicity in L is a
+property of a *biased estimator*, and for several turns I treated it as a property
+of the *representation*. The tell was available the whole time and I did not chase
+it: the adjoint beat `direct` 2x at fixed L, which already implies a better ρ
+exists at that bandwidth. Never infer a limit of the representation from the
+behaviour of one encoder.

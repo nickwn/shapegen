@@ -94,12 +94,18 @@ Two encoders:
   its codes are **not** portable — per-band coefficients differ 46% at L=12
   between two triangulations of one surface, against `direct`'s 12%.
 
-**`L` is a regularisation parameter for `direct`, not a fidelity knob.** Measured
-on a bottle: 0.115 (L=4), **0.054 (L=8)**, 0.064 (L=12), 0.0641 (L=24) — and
-decoding with no band limit at all also gives 0.0641. The curve converges to the
-error of reproducing ρ_direct faithfully; low L wins by accidentally truncating
-the estimator's bias, which lives in the high bands. The optimum moves with mesh
-resolution, so choose it by validation.
+**`L` is a regularisation parameter for `direct`, not a fidelity knob** — and this
+is a fact about that estimator, *not* about ρ̂. Measured on a bottle: 0.115 (L=4),
+**0.054 (L=8)**, 0.064 (L=12), 0.0641 (L=24), and decoding with no band limit at
+all also gives 0.0641. The curve converges to the error of reproducing ρ_direct
+faithfully; low L wins by accidentally truncating the estimator's bias, which lives
+in the high bands.
+
+**With the adjoint, error falls monotonically with bandwidth**, as you would
+expect: on a FaceScape head against a shared template, 0.056 (L=8) → 0.043 (L=12)
+→ 0.035 (L=16), against `direct`'s 0.092 / 0.090 / 0.088. So if accuracy matters
+more than encode cost, use `adjoint` **and** raise L; with `direct`, choose L by
+validation and expect an optimum around 8-16.
 
 For a dataset, `codec.encode_dataset(meshes, L, sphere=template)` encodes
 everything against **one shared sphere**, which is required for the codes to mean
