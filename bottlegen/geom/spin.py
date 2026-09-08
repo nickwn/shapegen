@@ -48,12 +48,29 @@ def base_sphere_residual(sph, faces) -> float:
     carries the same spurious field as a fixed additive offset.
 
     This is not hypothetical. The cMCF sphere of a FaceScape head has 2.1e6x
-    triangle-area spread, and ``Hvec = ½ M⁻¹ L V`` divides by vertex areas that
-    reach 1e-9, so H comes out in the range **[-8030, +3266]** where it should be
-    1, with rms 8.6. Measured consequences on real faces at L=16: reconstruction
-    0.0932 on that sphere against **0.0395** on an icosphere resampling of the
-    same heads, and a known band-limited rho was recovered with 314% coefficient
-    error instead of 3.6%.
+    triangle-area spread; this test returns **8.54** on it against 0.004 for an
+    icosphere. Measured consequences on real faces at L=16: reconstruction 0.0932
+    on that sphere against **0.0395** on an icosphere resampling of the same
+    heads, and a known band-limited rho recovered with 314% coefficient error
+    instead of 3.6%.
+
+    **How the damage actually reaches the pipeline**, since the obvious guess is
+    wrong: ``mesh_to_rho_direct`` computes ``H`` on the *target* mesh, never on the
+    sphere, so "H is broken on the sphere" is not the mechanism even though this
+    test exposes it that way. The two paths that do bite are
+
+    * the **decode and the projection**, which divide by sphere areas — the Dirac
+      assembly's ``-e_p e_q / (4 A_f)`` reaches ``1/(4A) = 7.4e7`` at ``A = 3.4e-9``,
+      and ``sh_project``'s Galerkin mass spans the same 1e6x;
+    * ``H`` on the **head**, which on FaceScape's own triangulation ranges over
+      [-1971, +1229] with rms 4.2 — small triangles in the source mesh, unrelated
+      to the sphere.
+
+    ``u`` is *not* damaged (range [-0.61, 2.90]): ``u_edge_lsq`` is a least-squares
+    fit and smooths over the degenerate edges.
+
+    Resampling onto a uniform icosphere fixes both paths at once, which is why the
+    end-to-end gain is larger than either alone would suggest.
 
     Guideline: below ~0.05 is fine (an icosphere gives 0.004 at subdiv 5); above
     ~0.5 the sphere is unusable and no amount of bandwidth will help, because the
