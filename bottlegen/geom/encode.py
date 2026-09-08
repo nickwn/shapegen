@@ -324,6 +324,8 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
     # variables; see band_precond for why it is worth ~8x.
     d = band_precond(L, alpha) if precond is None else np.asarray(precond, float)
 
+    seen = {}
+
     def fg(u):
         """Objective and gradient at preconditioned coefficients ``u``.
 
@@ -335,6 +337,7 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
         # Forward: rho -> X. The cache carries lambda and gamma so the backward
         # pass does not repeat the eigensolve.
         X, cache = da.decode_forward(sph, F, rho)
+        seen["gamma"] = cache["gamma"]      # carried out for the caller
         # J must be gauge-invariant (rotation AND scale) or the adjoint below is
         # not valid -- see stage_a_adjoint. Procrustes is exactly that.
         J, dJdX = procrustes(target, X)
@@ -355,6 +358,7 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
         return {"coeffs": c0, "rho": Yl @ c0, "sph": sph, "L": L, "alpha": alpha,
                 "err": float(np.sqrt(max(J0, 0.0))),
                 "err0": float(np.sqrt(max(J0, 0.0))),
+                "gamma": float(seen["gamma"]),
                 "nfev": 1, "niter": 0,
                 "gnorm0": float(np.abs(g0 / d).max()),
                 "gnorm": float(np.abs(g0 / d).max()),
@@ -379,9 +383,11 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
     # Gradient norms are reported in *coefficient* space, not the preconditioned
     # space, so they stay comparable across different alpha.
     gc = (res.jac / d) if res.jac is not None else None
+    fg(u)                                  # refresh gamma at the returned point
     return {"coeffs": c, "rho": Yl @ c, "sph": sph, "L": L, "alpha": alpha,
             "err": float(np.sqrt(max(J, 0.0))),
             "err0": float(np.sqrt(max(J0, 0.0))),
+            "gamma": float(seen["gamma"]),
             "nfev": int(res.nfev), "niter": int(res.nit),
             "gnorm0": float(np.abs(g0 / d).max()),
             "gnorm": float(np.abs(gc).max()) if gc is not None else np.nan,

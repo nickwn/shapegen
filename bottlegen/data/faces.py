@@ -180,7 +180,8 @@ def laplacian_smooth(V: np.ndarray, F: np.ndarray, t: float = 1e-3) -> np.ndarra
 
 
 def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
-                  align: bool = True, cap: bool = False, limit: int | None = None,
+                  align: bool = True, cap: bool = False, base: str = "native",
+                  subdiv: int = 6, limit: int | None = None,
                   verbose: bool = False):
     """``roots -> (X (N,n,3), F)``: loaded, aligned, smoothed heads.
 
@@ -191,6 +192,14 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
     5-7% for a position basis and is **pure cost for ρ**, which is exactly
     rotation-invariant on a shared template (measured 4e-15) — so pass
     ``align=False`` there.
+
+    ``base="icosphere"`` resamples every mesh onto a uniform icosphere at
+    ``subdiv``, returning ``(X, F, sphere)`` instead of ``(X, F)``. The cMCF sphere
+    of the mean shape is computed once as the correspondence and then discarded,
+    so the parameterisation is unchanged — only the sampling. Worth ~27% of
+    reconstruction error, because two stages of the codec divide by sphere
+    triangle areas that otherwise span 1e6x. ``base="native"`` (the default) keeps
+    the source connectivity and leaves the caller to build a sphere.
     """
     meshes = load_heads(roots, expressions=expressions, limit=limit, cap=cap,
                         verbose=verbose)
@@ -202,4 +211,19 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
         X = procrustes_align(X)
     if t_smooth > 0:
         X = np.stack([laplacian_smooth(x, F, t_smooth) for x in X])
-    return X, F
+    if base == "native":
+        return X, F
+    if base != "icosphere":
+        raise ValueError(f"base must be 'native' or 'icosphere', got {base!r}")
+
+    from .. import codec  # noqa: PLC0415
+    from ..geom.mesh import icosphere  # noqa: PLC0415
+    from ..geom.resample import resample_to  # noqa: PLC0415
+    S = codec.base_sphere(Mesh(X.mean(0), F))       # correspondence, used once
+    ico = icosphere(subdiv)
+    P = ico.vertices / np.linalg.norm(ico.vertices, axis=1, keepdims=True)
+    Xr, _, _, nf = resample_to(S, F, X, P)
+    if verbose:
+        print(f"resampled onto icosphere subdiv {subdiv}: {len(P)} verts, "
+              f"{nf} nearest-vertex fallbacks", flush=True)
+    return Xr, ico.faces, P

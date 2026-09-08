@@ -42,6 +42,16 @@ class EncodeResult:
     ``niter`` and ``gnorm`` are not diagnostics to ignore: a run that stopped at
     the iteration cap with a gradient still well above zero is an **upper bound**
     on the error, not a converged encode. :meth:`converged` is the check.
+
+    ``gamma`` is the squared Dirac residual of the encoded ρ, and it is the single
+    most predictive number here. ``γ = 0`` means some immersion actually *has* that
+    ρ; the further above zero, the more the decode is a least-squares fit rather
+    than a solve — and a least-squares fit **depends on the mesh it is solved on**,
+    so the codec's "coefficients are all you need" contract weakens with γ.
+    Measured: at γ≈1e-13 the same coefficients decode identically on a cMCF sphere
+    and an icosphere; at γ≈2e-2 they differ by 0.057. It also rises with bandwidth
+    for the ``direct`` encoder (3.5e-3 at L=8 to 4.6e-2 at L=24), which is why more
+    bands stop paying. Watch it.
     """
     coeffs: np.ndarray
     sphere: np.ndarray
@@ -51,6 +61,7 @@ class EncodeResult:
     niter: int
     nfev: int
     gnorm: float
+    gamma: float = float("nan")
     status: str = ""
     meta: dict = field(default_factory=dict)
 
@@ -67,7 +78,8 @@ class EncodeResult:
     def __repr__(self):
         flag = "" if self.converged else "  [ITERATION-CAPPED]"
         return (f"EncodeResult(L={self.L}, err={self.err:.5f}, "
-                f"niter={self.niter}, |g|={self.gnorm:.1e}){flag}")
+                f"niter={self.niter}, |g|={self.gnorm:.1e}, "
+                f"gamma={self.gamma:.2e}){flag}")
 
 
 def template_sphere(subdiv: int = 3) -> np.ndarray:
@@ -186,7 +198,8 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
                        optimise=(method == "adjoint"), **kw)
     return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
                         err0=o["err0"], niter=o["niter"], nfev=o["nfev"],
-                        gnorm=o["gnorm"], status=o.get("status", ""),
+                        gnorm=o["gnorm"], gamma=o.get("gamma", float("nan")),
+                        status=o.get("status", ""),
                         meta={"alpha": o.get("alpha")})
 
 

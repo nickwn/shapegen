@@ -84,7 +84,7 @@ def main():
     ap.add_argument("--roots", nargs="+", required=True)
     ap.add_argument("--basis", choices=("rho", "pca"), default="rho")
     ap.add_argument("-k", type=int, default=32, help="PCA components")
-    ap.add_argument("-L", type=int, default=12, help="rho-hat bandwidth")
+    ap.add_argument("-L", type=int, default=16, help="rho-hat bandwidth")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--holdout", type=int, default=40)
     ap.add_argument("--steps", type=int, default=20000)
@@ -113,8 +113,11 @@ def main():
         print(f"cache {a.cache}: {len(X)} heads, sphere and rho fields included",
               flush=True)
     else:
-        X, F = faces.build_dataset(roots, t_smooth=a.t_smooth, limit=a.limit,
-                                   cap=rho, align=not rho, verbose=True)
+        out = faces.build_dataset(roots, t_smooth=a.t_smooth, limit=a.limit,
+                                  cap=rho, align=not rho,
+                                  base="icosphere" if rho else "native",
+                                  verbose=True)
+        X, F, sph = out if rho else (*out, None)
     n_hold = min(a.holdout, len(X) // 4)
     Xtr, Xte = X[:-n_hold], X[-n_hold:]
     f_tr = f_te = None
@@ -175,8 +178,10 @@ def main():
     # 3. Smoothing is the stage that carries the result -- raw PCA plateaus on
     #    the scan noise -- so verify it rather than trusting the default.
     if a.t_smooth > 0:
-        Xr, _ = faces.build_dataset(roots, t_smooth=0.0, limit=a.limit,
-                                    cap=rho, align=not rho)
+        ro = faces.build_dataset(roots, t_smooth=0.0, limit=a.limit, cap=rho,
+                                 align=not rho,
+                                 base="icosphere" if rho else "native")
+        Xr = ro[0]
         fr = RhoBasis(sph, F, L=1).rho_fields(Xr) if rho else None
         br, _, _ = build_basis(a.basis, Xr[:-n_hold], F, a.k, a.L, sphere=sph,
                                fields=fr[:-n_hold] if rho else None)

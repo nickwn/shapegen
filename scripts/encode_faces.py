@@ -42,6 +42,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from bottlegen import codec                                    # noqa: E402
 from bottlegen.data import faces                               # noqa: E402
 from bottlegen.geom.mesh import Mesh                           # noqa: E402
+from bottlegen.geom import spin                               # noqa: E402
 from bottlegen.models.basis import RhoBasis                    # noqa: E402
 
 
@@ -51,6 +52,8 @@ def main():
     ap.add_argument("--expressions", nargs="+", default=["1_neutral"])
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--t-smooth", type=float, default=1e-3)
+    ap.add_argument("--base", choices=("icosphere", "native"), default="icosphere")
+    ap.add_argument("--subdiv", type=int, default=6)
     ap.add_argument("--out", default="reports/faces/rho_cache.npz")
     a = ap.parse_args()
 
@@ -60,17 +63,31 @@ def main():
     # exactly rotation-invariant on a shared template (measured 4e-15), so
     # aligning would be pure cost.
     t0 = time.perf_counter()
-    X, F = faces.build_dataset(roots, expressions=a.expressions,
-                               t_smooth=a.t_smooth, cap=True, align=False,
-                               limit=a.limit, verbose=False)
-    print(f"loaded + smoothed {len(X)} heads ({X.shape[1]} verts) in "
-          f"{time.perf_counter() - t0:.0f}s", flush=True)
+    out = faces.build_dataset(roots, expressions=a.expressions,
+                              t_smooth=a.t_smooth, cap=True, align=False,
+                              base=a.base, subdiv=a.subdiv, limit=a.limit,
+                              verbose=True)
+    if a.base == "icosphere":
+        X, F, sphere = out
+    else:
+        X, F = out
+        # ONE sphere for the whole set, from the mean head so it is not tied to
+        # whichever subject happened to be first.
+        sphere = codec.base_sphere(Mesh(X.mean(0), F))
+    print(f"loaded + smoothed + parameterised {len(X)} heads ({X.shape[1]} "
+          f"verts) in {time.perf_counter() - t0:.0f}s", flush=True)
 
-    # ONE sphere for the whole set, built from the mean head so it is not tied to
-    # whichever subject happened to be first.
-    t0 = time.perf_counter()
-    sphere = codec.base_sphere(Mesh(X.mean(0), F))
-    print(f"template cMCF sphere in {time.perf_counter() - t0:.0f}s", flush=True)
+    # A base sphere must reproduce rho = 0 against itself. Check it rather than
+    # assume it: a cMCF sphere of a head scores 8.54 here against an icosphere's
+    # 0.004, because two stages of the codec divide by its triangle areas.
+    resid = spin.base_sphere_residual(sphere, F)
+    print(f"base-sphere residual {resid:.4f} "
+          f"({'OK' if resid < 0.05 else 'POOR -- expect degraded reconstruction'})",
+          flush=True)
+    if resid > 0.5:
+        raise SystemExit(
+            f"base-sphere residual {resid:.3f} is too large to encode against; "
+            f"pass --base icosphere (or a finer --subdiv)")
 
     t0 = time.perf_counter()
     fields = RhoBasis(sphere, F, L=1).rho_fields(X)
@@ -92,7 +109,7 @@ def main():
     # Report the reconstruction ceiling right here, since it is the number the
     # generative model inherits and cannot beat, and it is nearly free now.
     print(f"\n{'L':>4s} {'coeffs':>7s} {'shape error':>12s}")
-    for L in (4, 8, 12, 16):
+    for L in (8, 12, 16, 24, 32):
         b = RhoBasis.fit(X, F, L, sphere, fields=fields)
         R = b.decode(b.encode(X[:16], fields=fields[:16]))
         e = float(np.mean([codec.shape_error(X[i], R[i]) for i in range(len(R))]))
