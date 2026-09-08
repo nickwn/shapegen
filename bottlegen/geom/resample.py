@@ -20,10 +20,7 @@ of at the source mesh's own vertices.
 
 from __future__ import annotations
 
-from collections import defaultdict
-
 import numpy as np
-from scipy.spatial import cKDTree
 
 __all__ = ["locate_on_sphere", "resample_to"]
 
@@ -32,55 +29,65 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
     """For each unit direction, the containing triangle of ``(S, F)`` and its
     barycentric weights. Returns ``(idx (m,), bary (m,3), n_fallback)``.
 
-    Searches from the nearest **vertex** and its 2-ring, not from the nearest
-    triangle *centroid*: on a mesh whose triangles span 1e6x in area, a large
-    triangle's centroid can be far from points inside it, and a centroid search
-    misses them. Measured, that left 39 of 10242 directions unresolved.
+    A hybrid, because neither half is sufficient alone. libigl's
+    ``point_mesh_squared_distance`` supplies the containing face from an AABB tree
+    in C++ — robust, and the part that was hand-rolled and buggy. But it returns
+    the **nearest** point on the mesh, and what is wanted is the **radial**
+    intersection: where the ray from the origin along ``d`` crosses the triangle.
+    Those coincide on a well-shaped sphere and diverge on a distorted one, so the
+    weights are solved for here rather than derived from libigl's closest point.
+    Taking igl's point directly produced 88 sliver triangles on a deliberately
+    degenerate source.
 
-    Anything still unresolved falls back to the nearest vertex with unit weight —
-    **never** to index -1 with zero weights, which silently indexes the last face
-    and places those vertices at the origin. That produced 44 zero-area triangles
-    and rho values of 1e91 before the fallback existed, and the failure surfaced
-    only much later as an ARPACK "starting vector is zero".
+    This replaced a hand-rolled search that shipped two bugs, both worth recording
+    because they are the failure modes any replacement must avoid:
+
+    * searching from the nearest triangle **centroid** misses points inside large
+      triangles — on a mesh with 1e6x area spread a centroid can be far from its
+      own interior — which left 39 of 10242 directions unresolved;
+    * leaving those unresolved as index ``-1`` with zero weights silently indexes
+      the last face and places the vertex at the **origin**. That produced 44
+      zero-area triangles, rho values of 1e91, and finally an ARPACK "starting
+      vector is zero" hundreds of lines away with nothing in between to explain it.
+
+    ``n_fallback`` counts faces whose plane passes through the origin, where the
+    radial weights are undefined and the centroid is substituted. On a sphere mesh
+    that should be zero; a nonzero count means the "sphere" is not star-shaped
+    about the origin and the whole resampling is suspect.
+
+    **Limitation.** Radial projection is ill-conditioned when a face's plane
+    passes near the origin, and a real cMCF sphere does contain such faces —
+    measured, the closest face plane on a FaceScape head's sphere sits 0.128 from
+    the origin against an ideal 1.0. It is benign there only because those faces
+    are small and absorb few queries; the production path returns 0 fallbacks and
+    0 sliver triangles at icosphere subdiv 5 and 6. A source with *few, huge*
+    near-origin faces does produce collapsed output triangles, so check
+    `triangle_areas` on the result if the source is unusual.
+
+    ``k`` is unused and kept for signature compatibility.
     """
-    S = np.asarray(S, dtype=float)
-    dirs = np.asarray(dirs, dtype=float)
-    v2f = defaultdict(list)
-    for f, tri in enumerate(F):
-        for v in tri:
-            v2f[int(v)].append(f)
-    ring = defaultdict(set)
-    for tri in F:
-        for a in tri:
-            ring[int(a)].update(int(x) for x in tri)
+    import igl  # noqa: PLC0415
 
-    _, near = cKDTree(S).query(dirs, k=k)
-    near = np.atleast_2d(near.T).T if near.ndim == 1 else near
-    idx = np.full(len(dirs), -1, dtype=np.int64)
-    bary = np.zeros((len(dirs), 3))
-    n_fallback = 0
-    for i, d in enumerate(dirs):
-        cands = []
-        for v in near[i]:
-            for u in ring[int(v)]:
-                cands.extend(v2f[u])
-        for f in dict.fromkeys(cands):
-            M = np.stack([S[F[f, 0]], S[F[f, 1]], S[F[f, 2]]], axis=1)
-            try:
-                w = np.linalg.solve(M, d)
-            except np.linalg.LinAlgError:
-                continue
-            if (w > -1e-9).all():
-                idx[i] = f
-                bary[i] = w / w.sum()
-                break
-        if idx[i] < 0:
-            v = int(near[i][0])
-            f = v2f[v][0]
-            idx[i] = f
-            bary[i] = (F[f] == v).astype(float)
-            n_fallback += 1
-    return idx, bary, n_fallback
+    S = np.asarray(S, dtype=float)
+    F = np.asarray(F, dtype=np.int64)
+    dirs = np.asarray(dirs, dtype=float)
+    _, idx, C = igl.point_mesh_squared_distance(dirs, S, F)
+    idx = np.asarray(idx, dtype=np.int64).ravel()
+
+    # Radial weights: solve [a b c] w = d, so that w0*a + w1*b + w2*c is parallel
+    # to d. Normalising w to sum to 1 then lands the point where the ray crosses
+    # the triangle's plane -- the projection of the sphere onto that face.
+    M = np.stack([S[F[idx, 0]], S[F[idx, 1]], S[F[idx, 2]]], axis=2)
+    try:
+        w = np.linalg.solve(M, dirs[:, :, None])[:, :, 0]
+    except np.linalg.LinAlgError:                # a singular face somewhere
+        w = np.stack([np.linalg.lstsq(M[i], dirs[i], rcond=None)[0]
+                      for i in range(len(dirs))])
+    s = w.sum(1, keepdims=True)
+    bad = np.abs(s).ravel() < 1e-12              # face plane through the origin
+    w = np.where(bad[:, None], 1.0 / 3.0, w / np.where(np.abs(s) < 1e-12, 1.0, s))
+    return idx, np.clip(w, 0.0, None) / np.maximum(
+        np.clip(w, 0.0, None).sum(1, keepdims=True), 1e-30), int(bad.sum())
 
 
 def resample_to(S, F, X, dirs):

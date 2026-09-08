@@ -10,12 +10,20 @@ requires-python = ">=3.11"
 dependencies = [
     "numpy",
     "scipy",
+    "libigl",       # AABB point-mesh queries in geom/resample.py
+    "matplotlib",   # scripts/plot_sh_roundtrip.py -- was used but undeclared
+    "torch",        # bottlegen/models/ -- core since the flow model landed
 ]
 
 [project.optional-dependencies]
-# Networks / data / geometry pipeline (added in later sessions).
-nets = ["torch", "einops", "omegaconf"]
-geom = ["trimesh", "pymeshlab", "robust-laplacian", "polyscope"]
+# Interactive inspection. Not importable headless (needs a GL context), so it is
+# deliberately optional -- but a scalar field drawn on the mesh is how several
+# bugs in this codebase were eventually found, after summary statistics hid them.
+viz = ["polyscope"]
+# Isotropic remeshing, if the cap-boundary slivers ever justify it. libigl does
+# NOT provide this: it has decimate/qslim (quadric collapse) and subdivision, but
+# no isotropic explicit remeshing.
+remesh = ["pymeshlab"]
 # spherical + quaternionic: independent SWSH oracle (tests) and, later, the
 # Wigner-D rotation augmentation. Not required at runtime.
 spectral = ["spherical", "quaternionic"]
