@@ -246,14 +246,26 @@ def main():
           f"max |mean| {dm:.3f}, max |std gap| {ds:.3f}; "
           f"N/d_eff = {len(Z) / d_eff:.1f} (want >= 20)")
 
-    # 6. Memorisation. The reference is how far a REAL unseen head sits from the
-    #    training set -- train-to-train nearest neighbour measures density among
-    #    training points, a different quantity, and gives a ratio that fails even
-    #    a known-good model.
-    d_gen = np.sqrt(((S[:, None] - Z[None]) ** 2).sum(2)).min(1).mean()
-    d_hold = np.sqrt(((enc_te(basis)[:, None] - Z[None]) ** 2).sum(2)).min(1).mean()
-    check("samples are not memorised", d_gen > 0.5 * d_hold,
-          f"sample->train {d_gen:.3f} vs heldout->train {d_hold:.3f}")
+    # 6. Memorisation, as a TAIL statistic rather than a mean.
+    #
+    #    Comparing mean nearest-neighbour distances does not isolate memorisation:
+    #    under-dispersed samples cluster toward the mean, where training points are
+    #    denser, so they score "closer to train" for a reason that has nothing to
+    #    do with copying. Measured, checks 5 and 6 fail and pass together, which is
+    #    the giveaway that they are one measurement wearing two hats.
+    #
+    #    Memorisation is a tail event: a copied sample sits far closer to its
+    #    nearest training point than any genuine draw does. So calibrate on real
+    #    unseen heads and count how many generated samples fall below where almost
+    #    none of them do.
+    d_gen = np.sqrt(((S[:, None] - Z[None]) ** 2).sum(2)).min(1)
+    d_hold = np.sqrt(((enc_te(basis)[:, None] - Z[None]) ** 2).sum(2)).min(1)
+    thr = float(np.quantile(d_hold, 0.05))
+    frac = float((d_gen < thr).mean())
+    check("samples are not memorised", frac < 0.20,
+          f"{frac * 100:.0f}% of samples are nearer the training set than 95% of "
+          f"real held-out heads are (threshold {thr:.2f}); "
+          f"means {d_gen.mean():.2f} vs {d_hold.mean():.2f}")
 
     # 7. Read a narrow win with suspicion: under-dispersed samples cluster near
     #    the mean, and held-out heads are nearer the mean than the tails, so

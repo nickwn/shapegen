@@ -1,8 +1,10 @@
 # Plan — flow matching over ρ̂ SH coefficients, for smoothed faces
 
-**Written 2026-09-07. Nothing here has been executed yet** — the sections marked
-*built* exist as uncommitted working files; everything else is proposed. If you
-are reading this after the work landed, check `git log` before trusting it.
+**Written 2026-09-07; implemented the same day (`f28f7f9`).** Sections carry
+inline **RESULT** notes where a measurement replaced a guess. Two of the plan's
+central assumptions turned out wrong and are marked as such — the cost wall does
+not exist, and the sample-count rule it relies on is necessary but not
+sufficient. Read those before the prose around them.
 
 The generative model produces a **band-limited spherical-harmonic coefficient
 vector of ρ**, directly. No PCA stage: the model's output *is* ρ̂, and decoding
@@ -18,11 +20,15 @@ On faces, ρ̂ is measurably a worse representation than PCA over positions:
 |---|---:|---:|
 | PCA over smoothed positions, k=64 | 64 | **0.0058** |
 | PCA over smoothed positions, k=32 | 32 | 0.0089 |
-| ρ̂, **direct** (the encoder this plan uses), any L | 81–1089 | **~0.084** |
+| ρ̂, **direct**, the head's own sphere, any L | 81–1089 | ~0.084 |
+| ρ̂, **direct**, one shared template (what this plan uses) | 169 (L=12) | **0.103** |
 | ρ̂, adjoint, L=32, the head's *own* cMCF sphere | 1089 | 0.0209 |
 
-A *shared* template sphere — which generation requires — will make the ρ̂ row
-worse still by an amount §8 measures.
+**RESULT.** The shared-template penalty is now measured, not predicted: 400
+subjects, L-sweep 0.133 (L=4), 0.109 (L=8), **0.103 (L=12)**, 0.107 (L=16). So the
+generative model inherits a ~0.10 ceiling — 18x the PCA figure — and the peak at
+L=12 is the same non-monotonicity `direct` shows everywhere, so **more bandwidth
+does not help**.
 
 The reason to do it anyway is real: **ρ̂ needs no correspondence.** PCA over
 positions only exists because FaceScape ships registered meshes. ρ̂ works on any
@@ -46,6 +52,10 @@ Measured: a random rotation of the input mesh changes ρ̂ by
 i.e. machine precision. The reason is structural: `ρ = H·e^u − 1`, `H` is
 rotation-invariant, and `e^u` is recovered from edge *lengths*, also invariant.
 Rotating the shape does not touch the template→shape correspondence.
+
+**RESULT.** Confirmed inside the built pipeline on real heads (9.7e-13) and
+pinned by `tests/test_models.py::test_rho_is_rotation_invariant`. The alignment
+stage is gone from the ρ path.
 
 **Consequences.** No Procrustes alignment stage — ρ cannot see it, so it would be
 pure cost. No Wigner-D augmentation. No equivariant architecture. The warning in
@@ -89,7 +99,26 @@ data-starved: the velocity field has to collapse probability onto a
 measure-zero set, which forces it to blow up as `t → 1`. The symptom looks the
 same (shrunken samples) but the fix is different, and §4 is about that difference.
 
-**This must be measured before anything else is built** — see §8, check 0a.
+**RESULT — this is where the plan was most wrong, in both directions.**
+
+Check 0a measured the participation ratio of the ρ̂ code matrix:
+
+| subjects | participation ratio | directions for 99% | N / d_eff |
+|---|---|---|---|
+| 30 | 2.3 | 23 of 169 | 13.2 |
+| 360 | **9.1** | **74 of 169** | **39.7** |
+
+So the target *is* near-singular as predicted — 74 of 169 directions carry
+everything — but `d_eff` **grows with the sample count**, because 30 heads simply
+do not reveal the manifold's structure. Any threshold computed from a small pilot
+underestimates it.
+
+And more importantly: **N/d_eff ≥ 20 is necessary but not sufficient.** At 39.7,
+comfortably past the rule, the dispersion check still fails (max |std gap| 0.590).
+The rule was derived on *PCA* codes, which are whitened and isotropic; ρ̂ is
+whitened band-wise and keeps a long tail of low-variance directions inside each
+band, so it is a harder target at the same nominal ratio. Do not reuse the
+threshold across representations — measure the dispersion directly.
 
 ---
 
@@ -97,7 +126,8 @@ same (shrunken samples) but the fix is different, and §4 is about that differen
 
 Ordered by expected value per unit of work.
 
-**(a) Use every expression, not just `1_neutral`.**
+**(a) Use every expression, not just `1_neutral`.** — *implemented
+(`expressions=`), not yet exercised at full scale.*
 FaceScape ships **20 expressions per subject**. 446 × 20 ≈ **8 900 meshes**
 against the 446 currently used — 20× the data, taking N/K to ~53 at L=12, above
 the threshold in §3. Expressions within a subject are correlated so the effective
@@ -108,16 +138,28 @@ faces". Caveat from `registered.py`: the mouth cap is invented geometry whose
 boundary moves with expression, so it enters the code looking like measured
 shape. Consider excluding the most extreme mouth expressions.
 
-**(b) A variance floor on the target.**
-Convolve the data with a small isotropic Gaussian (σ ≈ 0.05 in whitened units)
-before training — i.e. add fresh noise to `z1` each time it is drawn. This makes
-the target non-singular, removes the endpoint stiffness, and costs a blur of
-known size. It is what diffusion models do implicitly and is one line.
+**(b) A variance floor on the target.** — *implemented, and the effective lever.*
+Convolve the data with a small isotropic Gaussian before training — add fresh
+noise to `z1` each time it is drawn (`train_flow(sigma=...)`).
 
-**(c) Stop the ODE at `t = 1 − ε`.**
-The degeneracy only bites at the endpoint. Integrating to `1 − ε` (ε ≈ 0.02)
-samples a slightly blurred distribution and avoids the blow-up. One line, and it
-composes with (b).
+**RESULT**, 360 training heads at L=12, dispersion `max |std gap|` (want < 0.25):
+
+| σ | t_end | max std gap |
+|---|---|---|
+| 0.0 | 1.0 | 0.632 |
+| 0.0 | 0.95 | 0.622 |
+| 0.05 | 1.0 | 0.528 |
+| **0.15** | **0.95** | **0.416** |
+
+Monotone in σ and worth **34%** at σ=0.15 — but still short of the threshold, so it
+mitigates rather than fixes.
+
+**(c) Stop the ODE at `t = 1 − ε`.** — *implemented; on its own it does nothing.*
+`sample_flow(t_end=...)`. **RESULT: 0.632 → 0.622 alone** — within noise. The
+premise was that the field blows up at the endpoint; measured, it does not. The
+flow is **underfitting**, not diverging (the loss was still descending at 20 000
+steps), and truncation does not help underfitting. Keep it as a companion to (b),
+not as a lever of its own.
 
 **(d) Coarse-to-fine over bands.**
 The SH-native answer, and the one worth building if (a)–(c) are not enough.
@@ -164,9 +206,29 @@ model — plus an `expressions=` argument.
 
 **This plan uses the `direct` encoder** — now the codec default. The adjoint takes
 **321–376 s** on one 26 317-vertex head, which puts §4(a)'s 8 900 meshes at **two
-to three months** single-threaded. `direct` is closed-form: **0.81 s** at 2 562
-vertices, so the whole dataset encodes in hours, on one core, today. No decimation
-required to make the plan exist.
+to three months** single-threaded.
+
+**RESULT — the cost wall does not exist.** Measured end to end on all 400
+subjects via `scripts/encode_faces.py`:
+
+```
+loaded + smoothed 400 heads (26 321 verts)   74 s
+template cMCF sphere                         29 s   (once, for the whole set)
+rho fields (400, 26321)                      45 s   = 0.11 s/mesh
+```
+
+**148 s total.** Extrapolated, §4(a)'s 8 900 meshes are well under an hour. No
+decimation, no process pool needed — `n_jobs` is implemented (13.3 s → 4.4 s on 8
+bottles at 4 workers) but is not on the critical path for `direct`.
+
+What made it cheap is not just the encoder: **ρ_direct does not depend on L**, only
+the projection does, so `RhoBasis.rho_fields()` computes the per-mesh field once
+and every bandwidth in a sweep reuses it. That turns an L-sweep from `N x |L|`
+edge-least-squares solves into `N`.
+
+The expensive direction turned out to be the **decode**, not the encode: one ρ
+decode is an eigensolve on a `4n x 4n` matrix, **5.6 s** for a 26 321-vertex head.
+The §8 checks are budgeted accordingly.
 
 Two other reasons it is the right choice here, independent of cost:
 
@@ -214,9 +276,9 @@ Still worth doing:
 | `bottlegen/models/flow.py` | built | none — it takes an `(N,K)` array and never sees a mesh |
 | `bottlegen/models/basis.py` | built | `RhoBasis` exists (shared sphere, band-wise whitening). Add the §4(b) variance floor and §4(c) truncated sampling |
 | `bottlegen/data/faces.py` | built | add `cap=True` and `expressions=` |
-| `bottlegen/codec.py` | exists | `direct` is now the default, and `sphere` decides sphere policy rather than `method` — a shared template with `direct` is what this plan needs and used to be rejected |
-| `scripts/encode_faces.py` | **new** | one-time encode → cached `.npz` |
-| `scripts/train_faces.py` | built | switch basis; swap the checks per §8 |
+| `bottlegen/codec.py` | **done** | `direct` default; `sphere` decides sphere policy; `n_jobs` pool |
+| `scripts/encode_faces.py` | **done** | one-time encode → cached `.npz` |
+| `scripts/train_faces.py` | **done** | `--basis rho\|pca`, `--cache`, `--sigma`, `--t-end`, §8 checks |
 
 ---
 
@@ -273,6 +335,36 @@ Then, from the existing script:
 
 ---
 
+## 8b. What the dry run actually found
+
+Run: 400 subjects (360 train / 40 held out), L=12, σ=0.15, t_end=0.95.
+**7/10 checks pass.** Passing: basis agrees with the codec, reconstruction sane,
+codes whitened band-wise, **ρ̂ rotation-invariant (9.7e-13)**, flow beats a diagonal
+Gaussian, **generated γ matches the data's** (1.28e-2 against 1.39e-2 — samples are
+as realisable as real heads), decoded samples are valid genus-0 meshes.
+
+Failing: sample dispersion (§4b), the memorisation check (which is coupled to it —
+see below), and "smoothing improves the curve", which flipped sign between the
+40-head and 400-head runs and is measured over only 12 decodes; treat it as noise
+until re-run with a bigger budget.
+
+**The decisive result is visual, not numeric.** Rendering real → ρ̂ round trip →
+generated side by side: **the round trip already loses the ears and most identity
+detail.** The generated heads are about as good as the round trips. So the flow is
+*not* the bottleneck — the 0.103 representation ceiling is, and it is visible
+rather than merely tabulated. More bandwidth does not help: L=16 (0.107) is worse
+than L=12 (0.103).
+
+**A check-design flaw worth carrying forward.** Checks 5 and 6 failed and passed
+together across every configuration, which is the signature of one measurement
+wearing two hats: under-dispersed samples cluster toward the mean, where training
+points are denser, so they score "close to train" for a reason unrelated to
+copying. Check 6 is now a **tail** statistic — what fraction of samples sit nearer
+the training set than 95% of real held-out heads do — because memorisation is a
+tail event and a mean cannot see it.
+
+---
+
 ## 9. Expected outcome, and when to stop
 
 Expect ρ̂ + flow to land **worse on faces than PCA + Gaussian**, by roughly the
@@ -295,3 +387,13 @@ Stop and rescope if:
 The fallback is not defeat: neutral-only at L=8 with §4(b)+(c), accepting a
 blurrier model, still demonstrates the full path end to end and is the thing to
 generalise to unregistered shapes.
+
+**RESULT: that is where this landed, and it is the honest read.** The full path
+runs, samples are valid genus-0 heads with matching γ, and they look like heads.
+They also look like *the same* head, because L=12 through a shared template cannot
+carry identity — the round trip proves that before the flow is involved. The next
+move is therefore **not** a better generative model. It is either §4(a) at full
+scale (8 900 meshes, now affordable) to see whether more data widens the code
+distribution, or accepting that ρ̂-on-a-shared-template is the wrong ceiling for
+faces and that this pipeline's value is on unregistered shapes, where PCA is not
+available at all.
