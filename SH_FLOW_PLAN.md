@@ -419,6 +419,31 @@ Only after that is it worth asking whether §4(a)'s extra data widens the code
 distribution, or whether ρ̂-on-a-shared-template is simply the wrong ceiling for
 faces.
 
+**A tested alternative that does not work: per-shape spheres.** Since
+`ρ = H·e^u − 1` assumes a conformal map and the shared template is 11.5%
+non-conformal, the natural fix is to read ρ on each head's OWN cMCF sphere (4.9%,
+in-domain) and rely on Möbius normalisation to keep the spheres consistent.
+
+The premise holds: Möbius-normalised cMCF spheres of registered heads agree to
+0.023-0.076 mean vertex gap with only **0.6-4.4°** of unfixed rotation, and
+own→own really is 9% better than shared→shared. **The transfer cancels it.**
+
+| L | own→shared | aligned→shared | shared→shared | adjoint |
+|---|---|---|---|---|
+| 8 | 0.09282 | 0.09233 | 0.09408 | **0.05616** |
+| 12 | 0.09150 | **0.08999** | 0.09210 | **0.04307** |
+| 16 | 0.09806 | 0.09589 | **0.09074** | — |
+
+Fitting the rotation too — using all 6 Möbius DOF rather than the 3 the barycenter
+fixes — closes the sphere gap 31% and buys 1.7% at L=12, still losing at L=16.
+What is left is non-Möbius: the real difference in conformal structure between
+different people's heads.
+
+**The lesson is a ranking.** Fixing the domain violation is worth **+9%**;
+changing the objective from Dirac consistency to decoded shape error is worth
+**+110%**. Conformality was the smaller term all along, which is why the adjoint
+wins 2x on the *same* sphere with the *same* non-conformality.
+
 **A methodological note worth keeping.** `direct`'s non-monotonicity in L is a
 property of a *biased estimator*, and for several turns I treated it as a property
 of the *representation*. The tell was available the whole time and I did not chase
