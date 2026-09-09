@@ -27,25 +27,43 @@ Then::
     d = np.load(path)
     basis = RhoBasis.fit(d["X"], d["faces"], L, d["sphere"], fields=d["fields"])
 
-**Choosing ``--remesh`` and L.** Not independent: each remesh target has its own
-best bandwidth, and the selector is **gamma**, not L. Extra bands pay while
-gamma stays under about 1.1e-2 and hurt above it -- measured, every configuration
-turns up as gamma crosses that, whatever L it happens at. So take the largest L
-whose gamma is still under it. `EncodeResult.gamma` reports it.
+**Choosing ``--remesh`` and L.**
 
-Paired over 12 heads (same heads, subdiv-6 icosphere):
+Scored against the **original** FaceScape head, topology-free (chamfer), 6 heads —
+see the warning below for why the reference matters:
 
-    remesh   L   mean err    gamma
-      2.5   24    0.02381   5.5e-3   <- default: tied for best, 625 coeffs
-      2.5   32    0.02535   1.2e-2      t=+3.71 worse
-      5.0   24    0.02515   4.3e-3      t=+4.72 worse
-      5.0   32    0.02286   1.1e-2      tied (t=+1.99), but 1089 coeffs
+    remesh    L=16      L=24      L=32
+      none  0.03559   0.03203   0.03223
+      0.8%  0.03220   0.02773   0.02876
+      2.5%  0.02977   0.02751   0.02809     <- default
+      5.0%  0.03130   0.03014   0.03021
 
-2.5/L=24 and 5.0/L=32 are statistically indistinguishable. 2.5 is the default
-because it reaches that error in **625 coefficients rather than 1089**, and the
-generative model downstream is limited by code dimensionality, not by this
-ceiling. Do NOT read "coarser is better" as a trend -- 8.0% measures 0.0415,
-twice as bad, because by then the remesh is discarding real geometry.
+* **Remeshing is worth about 14%** (0.0320 -> 0.0275 at L=24).
+* **The target between 0.8% and 2.5% barely matters** — under 1%. 2.5% is the
+  default on a hair's margin, not a real one.
+* **5.0% is worse.** There is no "coarser is better" trend.
+* **L=24 is the optimum for every configuration**, and it is a real gain over
+  L=16 (0.0322 -> 0.0277).
+
+gamma explains the L optimum: it rises with bandwidth, and error turns up as it
+crosses about 1e-2 — for every configuration that happens between L=24
+(gamma 4-6e-3) and L=32 (gamma 1.1-1.2e-2). `EncodeResult.gamma` reports it, so
+the largest L with gamma under ~1e-2 is a checkable selection rule.
+
+.. warning::
+
+   **Score against a reference that does not move.** An earlier version of this
+   docstring claimed remeshing was worth 25-32% and that coarser was better, with
+   a paired t-test to match. All of it was an artifact: those numbers compared the
+   decode to the **resampled** target, and a coarser remesh degrades that target
+   (measured against the original head: 0.0147 at 0.8%, 0.0196 at 2.5%, 0.0245 at
+   5.0%). Coarser settings were being graded on a softer reference.
+
+   This same mistake was made three times in one session — once for the icosphere
+   resampling, twice here — because the reference and the configuration were
+   changed together and the difference attributed to the configuration. Any
+   comparison that alters the mesh must be scored against the original input with
+   a topology-free metric, never against its own resampled target.
 """
 
 from __future__ import annotations

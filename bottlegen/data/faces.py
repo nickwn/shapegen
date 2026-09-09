@@ -197,12 +197,13 @@ def isotropic_remesh(V, F, target_pct: float = 0.8, iterations: int = 6):
     *before* the resampling, never instead of it.
 
     ``target_pct`` is a percentage of the bounding-box diagonal; **smaller means
-    more vertices** (0.8 gives ~17k from FaceScape's 26k, 2.5 gives ~4k). The
-    measured optimum is **2.5**, and it is an interior one -- 8.0 is twice as bad
-    (0.0415 against 0.0238) because the remesh starts discarding real geometry.
-    The target also sets the best bandwidth: 2.5 peaks at L=24, 5.0 at L=32, and
-    those two tie on error. See ``scripts/encode_faces.py`` for the paired numbers
-    and the gamma-based rule for choosing L.
+    more vertices** (0.8 gives ~17k from FaceScape's 26k, 2.5 gives ~4k).
+
+    **The target barely matters between 0.8 and 2.5** — under 1% of reconstruction
+    error when scored honestly. 5.0 is worse. Remeshing *at all* is what pays
+    (~14%); which target you pick is nearly free. See
+    ``scripts/encode_faces.py`` for the table and for why an earlier claim of
+    25-32% and "coarser is better" was an artifact of a moving reference.
 
     Note this **breaks the registered correspondence** — the output is a new vertex
     set. :func:`build_dataset` restores a shared topology afterwards by composing
@@ -233,6 +234,18 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
     5-7% for a position basis and is **pure cost for ρ**, which is exactly
     rotation-invariant on a shared template (measured 4e-15) — so pass
     ``align=False`` there.
+
+    .. warning::
+
+       **This function moves the reconstruction target.** Both ``remesh`` and
+       ``base="icosphere"`` return a *resampled* mesh, and a coarser setting
+       returns one further from the original input (measured against the source
+       head: 0.0147 at ``remesh=0.8``, 0.0196 at 2.5, 0.0245 at 5.0). Scoring a
+       decode against that output therefore grades coarser settings on a softer
+       reference, and will report improvements that are not real — it did, three
+       times, by 25-32%. **Compare against the original input with a topology-free
+       metric** (:func:`~bottlegen.eval.metrics.chamfer`), never against what this
+       function returned.
 
     ``base="icosphere"`` resamples every mesh onto a uniform icosphere at
     ``subdiv``, returning ``(X, F, sphere)`` instead of ``(X, F)``. The cMCF sphere

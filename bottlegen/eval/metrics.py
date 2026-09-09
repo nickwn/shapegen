@@ -44,6 +44,14 @@ def chamfer(A, B, scale_align=False) -> float:
     for comparing meshes with different vertex counts — a decode on an icosphere
     against one on a cMCF sphere, say.
 
+    **Use it whenever a pipeline change alters the mesh.** `codec.shape_error` is
+    per-vertex and can only compare meshes that share topology, which forces you
+    to score against the *resampled* target — and if the change under test also
+    moved that target, the comparison is confounded. That happened three times in
+    one session, reporting 25-32% improvements that were entirely a softer
+    reference. The rule: fix the reference to the original input and compare
+    everything to it with this function.
+
     ``scale_align`` normalises by RMS radius. It used to use the raw sums, which
     is **vertex-count dependent** and therefore wrong for exactly the case this
     function is otherwise good at: two unit spheres with 10242 and 40962 vertices
