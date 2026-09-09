@@ -280,7 +280,7 @@ def decode_sh(coeffs: np.ndarray, sph: np.ndarray, F: np.ndarray,
 def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
               rho0=None, cmcf_iters: int = 300, verbose: bool = False,
               alpha: float = 0.75, maxcor: int = 40, precond=None,
-              optimise: bool = True):
+              optimise: bool = True, residual: int = 0):
     """Encode ``mesh`` as ``(L+1)²`` real SH coefficients of ρ.
 
     ``sph`` is the cMCF sphere parameterisation (computed if absent — it is the
@@ -319,6 +319,38 @@ def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
         from .operators import vertex_areas  # noqa: PLC0415
         c0 = sh_project(rho0, Yl, mass=vertex_areas(sph, F))
     c0 = np.asarray(c0, dtype=float)
+
+    if residual:
+        # Re-measure after decoding, and add what is still missing.
+        #
+        # The single-shot coefficients above are a band-limited measurement of the
+        # INPUT, so their high bands carry the high-frequency part of that
+        # measurement -- estimator error included -- which is why `direct` stops
+        # improving with bandwidth and then degrades. Decoding and re-measuring
+        # asks a different question: given what the decode already reproduces,
+        # what is left? That residual sees the decode's own distortion, which no
+        # measurement of the input can.
+        #
+        # Measured (3 heads, remesh 2.5%, icosphere subdiv 6, chamfer against the
+        # ORIGINAL head): it removes the turn-up. Single-shot peaks at L=24 and
+        # degrades at L=32 (0.02555 -> 0.02630); with one pass L=32 becomes the
+        # best point at 0.02411, beating every single-shot configuration.
+        #
+        # ONE pass is the whole method. A second and third change nothing
+        # (0.02411 -> 0.02414 -> 0.02413), and staging the bands coarse-to-fine is
+        # worse than one full-bandwidth pass. Cost is one extra decode.
+        #
+        # Note gamma RISES here (1.2e-2 -> 1.4e-2 at L=32) while the error falls,
+        # so the "bandwidth pays until gamma ~ 1e-2" rule applies to single-shot
+        # encoders only.
+        from ..geom.mesh import Mesh  # noqa: PLC0415
+        from .operators import vertex_areas  # noqa: PLC0415
+        mass = vertex_areas(sph, F)
+        for _ in range(residual):
+            lam, _ = dirac.spin_transform(sph, F, Yl @ c0)
+            Xd = dirac.integrate_edges(sph, F, lam)
+            now = spin.mesh_to_rho_direct(Mesh(Xd, F), sph)
+            c0 = c0 + sh_project(rho0 - now, Yl, mass=mass)
 
     # Optimise in preconditioned variables u, with c = d * u. Pure change of
     # variables; see band_precond for why it is worth ~8x.

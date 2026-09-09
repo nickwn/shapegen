@@ -137,6 +137,13 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
       refinement and stays **comparable across meshes** (per-band coefficients
       differ 7.7% at L=4, 12.4% at L=12 between two triangulations of one
       surface). Its accuracy is **not monotone in L** — see below.
+    * ``"residual"`` — ``direct``, then **one** decode-and-re-measure pass that
+      adds what the reconstruction is still missing. Two decodes instead of one.
+      Its high bands describe the decode's shortfall rather than the input's high
+      frequencies, which is what lets bandwidth keep paying: single-shot peaks at
+      L=24 and degrades at L=32, while ``residual`` makes L=32 the best point
+      (0.02411 against 0.02630) and beats every ``direct`` configuration. A second
+      pass adds nothing.
     * ``"adjoint"`` — optimises decoded shape error through the adjoint. Several
       times more accurate on a fixed mesh (0.0127 against 0.0644 on a bottle at
       L=12) and ~26x the cost: 19 s/mesh at subdiv 3, and **321-376 s** at 26k
@@ -192,10 +199,12 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     decode is nonlinear, so the band-limited optimum is not the projection of the
     unconstrained one, and the difference grows as L falls.
     """
-    if method not in ("direct", "adjoint"):
-        raise ValueError(f"method must be 'direct' or 'adjoint', got {method!r}")
+    if method not in ("direct", "residual", "adjoint"):
+        raise ValueError(f"method must be 'direct', 'residual' or 'adjoint', "
+                         f"got {method!r}")
     o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter,
-                       optimise=(method == "adjoint"), **kw)
+                       optimise=(method == "adjoint"),
+                       residual=(1 if method == "residual" else 0), **kw)
     return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
                         err0=o["err0"], niter=o["niter"], nfev=o["nfev"],
                         gnorm=o["gnorm"], gamma=o.get("gamma", float("nan")),
