@@ -26,6 +26,26 @@ Then::
 
     d = np.load(path)
     basis = RhoBasis.fit(d["X"], d["faces"], L, d["sphere"], fields=d["fields"])
+
+**Choosing ``--remesh`` and L.** Not independent: each remesh target has its own
+best bandwidth, and the selector is **gamma**, not L. Extra bands pay while
+gamma stays under about 1.1e-2 and hurt above it -- measured, every configuration
+turns up as gamma crosses that, whatever L it happens at. So take the largest L
+whose gamma is still under it. `EncodeResult.gamma` reports it.
+
+Paired over 12 heads (same heads, subdiv-6 icosphere):
+
+    remesh   L   mean err    gamma
+      2.5   24    0.02381   5.5e-3   <- default: tied for best, 625 coeffs
+      2.5   32    0.02535   1.2e-2      t=+3.71 worse
+      5.0   24    0.02515   4.3e-3      t=+4.72 worse
+      5.0   32    0.02286   1.1e-2      tied (t=+1.99), but 1089 coeffs
+
+2.5/L=24 and 5.0/L=32 are statistically indistinguishable. 2.5 is the default
+because it reaches that error in **625 coefficients rather than 1089**, and the
+generative model downstream is limited by code dimensionality, not by this
+ceiling. Do NOT read "coarser is better" as a trend -- 8.0% measures 0.0415,
+twice as bad, because by then the remesh is discarding real geometry.
 """
 
 from __future__ import annotations
@@ -54,9 +74,9 @@ def main():
     ap.add_argument("--t-smooth", type=float, default=1e-3)
     ap.add_argument("--base", choices=("icosphere", "native"), default="icosphere")
     ap.add_argument("--subdiv", type=int, default=6)
-    ap.add_argument("--remesh", type=float, default=0.8,
+    ap.add_argument("--remesh", type=float, default=2.5,
                     help="isotropic remesh target %% of bbox diagonal before "
-                         "cMCF; 0 disables. Worth 25-32%% of reconstruction.")
+                         "cMCF; 0 disables. 2.5%% measured best (see module doc).")
     ap.add_argument("--out", default="reports/faces/rho_cache.npz")
     a = ap.parse_args()
 

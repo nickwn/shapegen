@@ -84,7 +84,7 @@ def main():
     ap.add_argument("--roots", nargs="+", required=True)
     ap.add_argument("--basis", choices=("rho", "pca"), default="rho")
     ap.add_argument("-k", type=int, default=32, help="PCA components")
-    ap.add_argument("-L", type=int, default=16, help="rho-hat bandwidth")
+    ap.add_argument("-L", type=int, default=24, help="rho-hat bandwidth")
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--holdout", type=int, default=40)
     ap.add_argument("--steps", type=int, default=20000)
@@ -116,7 +116,7 @@ def main():
         out = faces.build_dataset(roots, t_smooth=a.t_smooth, limit=a.limit,
                                   cap=rho, align=not rho,
                                   base="icosphere" if rho else "native",
-                                  remesh=0.8 if rho else None, verbose=True)
+                                  remesh=2.5 if rho else None, verbose=True)
         X, F, sph = out if rho else (*out, None)
     n_hold = min(a.holdout, len(X) // 4)
     Xtr, Xte = X[:-n_hold], X[-n_hold:]
@@ -181,7 +181,7 @@ def main():
         ro = faces.build_dataset(roots, t_smooth=0.0, limit=a.limit, cap=rho,
                                  align=not rho,
                                  base="icosphere" if rho else "native",
-                                 remesh=0.8 if rho else None)
+                                 remesh=2.5 if rho else None)
         Xr = ro[0]
         fr = RhoBasis(sph, F, L=1).rho_fields(Xr) if rho else None
         br, _, _ = build_basis(a.basis, Xr[:-n_hold], F, a.k, a.L, sphere=sph,

@@ -196,8 +196,13 @@ def isotropic_remesh(V, F, target_pct: float = 0.8, iterations: int = 6):
     0.054-0.067 against the icosphere route's 0.034-0.037. So remeshing belongs
     *before* the resampling, never instead of it.
 
-    ``target_pct`` is a percentage of the bounding-box diagonal. Smaller means more
-    vertices: 0.8 gives ~17k from FaceScape's 26k, 0.5 gives ~45k.
+    ``target_pct`` is a percentage of the bounding-box diagonal; **smaller means
+    more vertices** (0.8 gives ~17k from FaceScape's 26k, 2.5 gives ~4k). The
+    measured optimum is **2.5**, and it is an interior one -- 8.0 is twice as bad
+    (0.0415 against 0.0238) because the remesh starts discarding real geometry.
+    The target also sets the best bandwidth: 2.5 peaks at L=24, 5.0 at L=32, and
+    those two tie on error. See ``scripts/encode_faces.py`` for the paired numbers
+    and the gamma-based rule for choosing L.
 
     Note this **breaks the registered correspondence** — the output is a new vertex
     set. :func:`build_dataset` restores a shared topology afterwards by composing
