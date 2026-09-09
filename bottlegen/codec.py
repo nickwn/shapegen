@@ -125,25 +125,46 @@ def base_sphere(mesh, iters: int = 300) -> np.ndarray:
 
 
 def encode(mesh, L: int, sphere=None, maxiter: int = 200,
-           method: str = "direct", **kw) -> EncodeResult:
+           method: str = "residual", **kw) -> EncodeResult:
     """``mesh → ρ̂ ∈ ℝ^((L+1)²)``.
 
-    Two encoders:
+    Three encoders:
 
-    * ``"direct"`` (default) — ``ρ = H·e^u − 1`` read straight off the geometry,
+    * ``"direct"`` — ``ρ = H·e^u − 1`` read straight off the geometry,
       with ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`. Closed-form,
       so nothing to converge and no iteration cap to police (``niter`` is 0 and
       means it). A measurement of a continuum quantity, so it converges under
       refinement and stays **comparable across meshes** (per-band coefficients
       differ 7.7% at L=4, 12.4% at L=12 between two triangulations of one
       surface). Its accuracy is **not monotone in L** — see below.
-    * ``"residual"`` — ``direct``, then **one** decode-and-re-measure pass that
-      adds what the reconstruction is still missing. Two decodes instead of one.
-      Its high bands describe the decode's shortfall rather than the input's high
-      frequencies, which is what lets bandwidth keep paying: single-shot peaks at
-      L=24 and degrades at L=32, while ``residual`` makes L=32 the best point
-      (0.02411 against 0.02630) and beats every ``direct`` configuration. A second
-      pass adds nothing.
+    * ``"residual"`` (default) — ``direct``, then **one** decode-and-re-measure
+      pass that adds what the reconstruction is still missing. Two decodes
+      instead of one. Its high bands describe the decode's shortfall rather than
+      the input's high frequencies, which is what lets bandwidth keep paying:
+      ``direct`` peaks at L=24 and turns up after, ``residual`` keeps improving.
+      A second pass adds nothing.
+
+      Measured on 6 FaceScape heads, ``remesh=0.8``, chamfer against the
+      **original** head, and separately over the face region alone (a 0.7-radius
+      ball about the nose tip, 40% of vertices — the whole-head mean is dominated
+      by the featureless cranium and neck):
+
+      .. code-block:: text
+
+           L  coeffs     gamma     direct  residual  |  face: direct  residual
+          16     289   3.5e-03    0.03431   0.03381  |       0.02366   0.02300
+          24     625   1.0e-02    0.02992   0.02868  |       0.02121   0.01982
+          32    1089   2.7e-02    0.03068   0.02640  |       0.02427   0.01918
+          40    1681   4.8e-02    0.03508   0.02598  |       0.03091   0.01927
+
+      **L=32 is the operating point.** ``residual`` beats ``direct`` at every L,
+      by 14%/21% (whole/face) at L=32 and 26%/38% at L=40. But L=40 costs 54% more
+      coefficients to buy 1.6% on the whole head and is *marginally worse* on the
+      face — the face plateaus at L=32.
+
+      Note the old "gamma under 1e-2" selection rule does **not** carry over:
+      ``residual`` is still improving at gamma 4.8e-2. That rule described
+      ``direct``'s turn-up, which is exactly what this method removes.
     * ``"adjoint"`` — optimises decoded shape error through the adjoint. Several
       times more accurate on a fixed mesh (0.0127 against 0.0644 on a bottle at
       L=12) and ~26x the cost: 19 s/mesh at subdiv 3, and **321-376 s** at 26k
@@ -151,12 +172,19 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
       codes are *not* comparable across meshes — the same 7.4% at L=4 becomes
       **46.0%** at L=12.
 
-    **Why ``direct`` is the default.** Accuracy on one fixed mesh is the wrong
-    axis for the thing this codec exists to feed. A dataset encoder has to be
-    affordable (the adjoint puts ~9000 meshes at two to three months of compute)
-    and its codes have to mean the same thing across meshes, which the adjoint's
-    measurably do not. Reach for ``adjoint`` when you are reconstructing one
-    known mesh as accurately as possible.
+    **Why ``residual`` is the default, and not ``adjoint``.** Accuracy on one
+    fixed mesh is the wrong axis for the thing this codec exists to feed. A
+    dataset encoder has to be affordable (the adjoint puts ~9000 meshes at two to
+    three months of compute) and its codes have to mean the same thing across
+    meshes, which the adjoint's measurably do not. ``residual`` costs one extra
+    decode over ``direct`` — not 26x — and keeps ``direct``'s cross-mesh
+    comparability, because it is still a measurement of the same continuum
+    quantity, just measured twice. Reach for ``adjoint`` only when you are
+    reconstructing one known mesh as accurately as possible.
+
+    ``direct`` remains available and is what you want if you need the single-shot
+    estimator itself rather than the best reconstruction — it is the one whose
+    per-band values are a direct reading of the geometry.
 
     The trade is real and it is not small: on a smoothed FaceScape head ``direct``
     sits at ~0.084 *regardless of L* while the adjoint reaches 0.021. On faces
@@ -231,7 +259,7 @@ def shape_error(target: np.ndarray, X: np.ndarray) -> float:
     return float(np.sqrt(_enc.procrustes(target, X)[0]))
 
 
-def encode_dataset(meshes, L: int, method: str = "direct", sphere=None,
+def encode_dataset(meshes, L: int, method: str = "residual", sphere=None,
                    maxiter: int = 200, n_jobs: int = 1, verbose: bool = False):
     """Encode many meshes into a comparable code set.
 
@@ -270,8 +298,9 @@ def encode_dataset(meshes, L: int, method: str = "direct", sphere=None,
     between invocations, so the adjoint encoder was never bit-reproducible and the
     pool adds nothing on top of that. ``direct`` is exactly identical either way.
     """
-    if method not in ("direct", "adjoint"):
-        raise ValueError(f"method must be 'direct' or 'adjoint', got {method!r}")
+    if method not in ("direct", "residual", "adjoint"):
+        raise ValueError(f"method must be 'direct', 'residual' or 'adjoint', "
+                         f"got {method!r}")
     meshes = list(meshes)
     n = len(meshes[0].vertices)
 

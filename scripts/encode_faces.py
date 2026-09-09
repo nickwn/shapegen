@@ -29,26 +29,41 @@ Then::
 
 **Choosing ``--remesh`` and L.**
 
-Scored against the **original** FaceScape head, topology-free (chamfer), 6 heads —
-see the warning below for why the reference matters:
+Scored against the **original** FaceScape head, topology-free (chamfer), 6 heads,
+``method="residual"`` at L=40 — see the warning below for why the reference
+matters. Reported twice: over the whole head, and over the **face region** alone
+(a 0.7-radius ball about the nose tip, 40% of vertices). Both are needed, because
+most of a FaceScape head is bald cranium and neck and a whole-head mean is
+dominated by them:
 
-    remesh    L=16      L=24      L=32
-      none  0.03559   0.03203   0.03223
-      0.8%  0.03220   0.02773   0.02876
-      2.5%  0.02977   0.02751   0.02809     <- default
-      5.0%  0.03130   0.03014   0.03021
+    remesh  smooth |  whole: target   decode |   face: target   decode
+       2.5   1e-03 |        0.02327  0.02833 |        0.01338  0.01936
+       0.8   1e-03 |        0.01731  0.02598 |        0.01119  0.01927   <- default
+       0.8       0 |        0.01521  0.02716 |        0.00866  0.02325
+       0.4   1e-03 |        0.01691  0.02614 |        0.01103  0.01952
 
-* **Remeshing is worth about 14%** (0.0320 -> 0.0275 at L=24).
-* **The target between 0.8% and 2.5% barely matters** — under 1%. 2.5% is the
-  default on a hair's margin, not a real one.
-* **5.0% is worse.** There is no "coarser is better" trend.
-* **L=24 is the optimum for every configuration**, and it is a real gain over
-  L=16 (0.0322 -> 0.0277).
+* **0.8% is the right target, and 2.5% was costing real detail.** At 2.5% the
+  remeshed mean head is only **1807 vertices** — 10 mm edges on a 404 mm bbox
+  diagonal, wider than a nostril — so the composed transfer is piecewise-linear
+  over ~3600 triangles no matter how fine the icosphere is. The target sits
+  0.02327 from the original head against 0.01731 at 0.8%.
+* **But almost none of that reaches the face.** Going 2.5% -> 0.8% improves the
+  whole-head decode 8% and the face decode **0%** (0.01936 -> 0.01927). The gain
+  is on the cranium and neck, where the coarse remesh was faceting an otherwise
+  smooth surface. In the face the encoder, not the target, is the binding
+  constraint — the error there is Gibbs ringing at the lip seam, eyelid creases
+  and nostril, which no amount of target detail addresses.
+* **0.4% buys nothing over 0.8%** and costs 4x the vertices.
+* **Smoothing must stay on.** ``--t-smooth 0`` gives the *best* target of all
+  (face 0.00866, 35% better) and the *worst* decode (face 0.02325, 20% worse).
+  That is the per-subject scan noise: unrepresentable, and it destabilises the
+  encode. A crisper-looking decode that measures worse is high-frequency error,
+  not recovered detail.
 
-gamma explains the L optimum: it rises with bandwidth, and error turns up as it
-crosses about 1e-2 — for every configuration that happens between L=24
-(gamma 4-6e-3) and L=32 (gamma 1.1-1.2e-2). `EncodeResult.gamma` reports it, so
-the largest L with gamma under ~1e-2 is a checkable selection rule.
+For L, see :func:`bottlegen.codec.encode` — **L=32 is the operating point**.
+L=40 costs 54% more coefficients for 1.6% on the whole head and is marginally
+worse on the face. The old "gamma under 1e-2" rule applied to ``direct`` only;
+``residual`` is still improving at gamma 4.8e-2.
 
 .. warning::
 
@@ -64,6 +79,13 @@ the largest L with gamma under ~1e-2 is a checkable selection rule.
    changed together and the difference attributed to the configuration. Any
    comparison that alters the mesh must be scored against the original input with
    a topology-free metric, never against its own resampled target.
+
+   A fourth trap, of the same family: a **whole-head** mean is dominated by the
+   cranium and neck, so it can move a lot while the face does not move at all.
+   Report :func:`~bottlegen.eval.metrics.chamfer_region` about
+   :func:`~bottlegen.eval.metrics.nose_tip` alongside it. Getting the tip on the
+   wrong end of the depth axis scores the occiput and reports gains that are not
+   about the face — that happened too.
 """
 
 from __future__ import annotations
@@ -92,9 +114,9 @@ def main():
     ap.add_argument("--t-smooth", type=float, default=1e-3)
     ap.add_argument("--base", choices=("icosphere", "native"), default="icosphere")
     ap.add_argument("--subdiv", type=int, default=6)
-    ap.add_argument("--remesh", type=float, default=2.5,
+    ap.add_argument("--remesh", type=float, default=0.8,
                     help="isotropic remesh target %% of bbox diagonal before "
-                         "cMCF; 0 disables. 2.5%% measured best (see module doc).")
+                         "cMCF; 0 disables. 0.8%% measured best (see module doc).")
     ap.add_argument("--out", default="reports/faces/rho_cache.npz")
     a = ap.parse_args()
 

@@ -239,13 +239,19 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
 
        **This function moves the reconstruction target.** Both ``remesh`` and
        ``base="icosphere"`` return a *resampled* mesh, and a coarser setting
-       returns one further from the original input (measured against the source
-       head: 0.0147 at ``remesh=0.8``, 0.0196 at 2.5, 0.0245 at 5.0). Scoring a
-       decode against that output therefore grades coarser settings on a softer
-       reference, and will report improvements that are not real — it did, three
-       times, by 25-32%. **Compare against the original input with a topology-free
-       metric** (:func:`~bottlegen.eval.metrics.chamfer`), never against what this
-       function returned.
+       returns one further from the original input (chamfer against the source
+       head, 6 heads: 0.0169 at ``remesh=0.4``, 0.0173 at 0.8, 0.0233 at 2.5).
+       Scoring a decode against that output therefore grades coarser settings on a
+       softer reference, and will report improvements that are not real — it did,
+       three times, by 25-32%. **Compare against the original input with a
+       topology-free metric** (:func:`~bottlegen.eval.metrics.chamfer`), never
+       against what this function returned.
+
+       **And score the face separately.** Most of these 26321 vertices are bald
+       cranium and neck, so a whole-head mean moves for reasons unrelated to the
+       face: 2.5% -> 0.8% is worth 8% whole-head and **0%** on the face. Use
+       :func:`~bottlegen.eval.metrics.chamfer_region` about
+       :func:`~bottlegen.eval.metrics.nose_tip` alongside the whole-head number.
 
     ``base="icosphere"`` resamples every mesh onto a uniform icosphere at
     ``subdiv``, returning ``(X, F, sphere)`` instead of ``(X, F)``. The cMCF sphere
@@ -288,6 +294,10 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
         # then compose the two transfers so every head still lands on ONE
         # icosphere. Remeshing alone would break the shared topology the codes
         # depend on; composing restores it.
+        # target_pct is a % of the bbox diagonal, which for a head is ~404 mm --
+        # so 2.5 means 10 mm edges and reduces the mean to ~1807 vertices, wider
+        # than a nostril and coarser than anything the icosphere can then recover.
+        # 0.8 (~16900 verts) is the measured operating point.
         M, FM = isotropic_remesh(mean, F, target_pct=remesh)
         iW, W, dmax = locate_on_mesh(mean, F, M)    # M's vertices, back onto F
         S = codec.base_sphere(Mesh(M, FM))          # cMCF of the REMESHED mean

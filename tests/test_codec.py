@@ -223,3 +223,38 @@ def test_decode_is_mesh_independent_when_rho_is_realisable():
     Xb = norm_shape(codec.decode(c, Pb, b.faces), b.faces)
     print(f"[mesh-independence] floor {floor:.5f}, with rho {cham(Xa, Xb):.5f}")
     assert cham(Xa, Xb) < floor * 1.15
+
+
+def test_nose_tip_picks_the_dense_end_not_the_far_end():
+    """Both ends of the depth axis are extreme; the face is the populated one.
+
+    Regression: choosing by |z| alone picked the occiput, giving a "face region"
+    of 1% of vertices and a 17% improvement that measured the back of the skull.
+    """
+    import numpy as np
+    from bottlegen.eval.metrics import nose_tip
+
+    rng = np.random.default_rng(0)
+    # A dense cluster near z=+1 and a lone spike further out at z=-1.4.
+    dense = np.c_[rng.normal(0, .15, 400), rng.normal(0, .15, 400),
+                  1.0 + rng.normal(0, .05, 400)]
+    sparse = np.array([[0., 0., -1.4]])
+    V = np.vstack([dense, sparse])
+    assert nose_tip(V, r=0.8)[2] > 0     # the dense end, not the extreme one
+
+
+def test_chamfer_region_is_restricted_and_rejects_an_empty_region():
+    import numpy as np
+    import pytest
+    from bottlegen.eval.metrics import chamfer, chamfer_region
+
+    rng = np.random.default_rng(1)
+    A = rng.normal(size=(500, 3))
+    B = A.copy()
+    far = np.linalg.norm(A, axis=1) > 1.2
+    B[far] += 5.0                        # all the error lives outside the region
+
+    c = np.zeros(3)
+    assert chamfer_region(A, B, c, 0.5) < 0.05 * chamfer(A, B)
+    with pytest.raises(ValueError, match="region is empty"):
+        chamfer_region(A, B, np.array([50., 0., 0.]), 0.5)

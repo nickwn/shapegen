@@ -15,6 +15,7 @@ from ..geom.mesh import Mesh, face_normals
 from ..geom.operators import vertex_areas
 
 __all__ = ["willmore_energy", "flip_fraction", "genus", "chamfer",
+           "nose_tip", "chamfer_region",
            "triangle_quality"]
 
 
@@ -69,6 +70,52 @@ def chamfer(A, B, scale_align=False) -> float:
         A = A * np.sqrt((B ** 2).mean() / max((A ** 2).mean(), 1e-30))
     da, _ = cKDTree(B).query(A)
     db, _ = cKDTree(A).query(B)
+    return 0.5 * (da.mean() + db.mean())
+
+
+def nose_tip(V, r: float = 0.8):
+    """The nose tip of a head, as the extreme point along the depth axis that has
+    vertices *around* it.
+
+    Both ends of that axis are extreme points of a head, and picking the wrong one
+    silently scores the occiput: with FaceScape's registered topology the face
+    end had 11156 vertices within ``r`` and the cranium end 670, so a
+    face-region metric built on the wrong end covered 1% of the mesh and reported
+    a 17% improvement that was measuring the back of the skull.
+
+    Choosing by local vertex count is a property of the sampling rather than a
+    hand-picked index, so it survives a change of subject. ``V`` is expected in a
+    frame where z is depth and the scale is RMS-normalised.
+    """
+    V = np.asarray(V, float)
+    cand = [V[np.argmax(V[:, 2])], V[np.argmin(V[:, 2])]]
+    n = [int((np.linalg.norm(V - c, axis=1) < r).sum()) for c in cand]
+    return cand[int(np.argmax(n))]
+
+
+def chamfer_region(A, B, centre, radius: float) -> float:
+    """Chamfer restricted to points within ``radius`` of ``centre``.
+
+    **A whole-head mean hides the face.** Most of a FaceScape head is bald
+    cranium and neck, which are nearly featureless and nearly identical between
+    subjects, so a mean over all of it flatters any model and — worse — moves for
+    reasons that have nothing to do with the face. Dropping ``remesh`` from 2.5%
+    to 0.8% improved the whole-head decode 8% and the face decode 0%: the entire
+    gain was cranium faceting.
+
+    Nearest neighbours are searched over the **full** other cloud and only the
+    average is restricted, because masking both clouds first would invent error
+    at the region boundary where the true match lies just outside it.
+    """
+    A = np.asarray(A, float)
+    B = np.asarray(B, float)
+    ma = np.linalg.norm(A - centre, axis=1) < radius
+    mb = np.linalg.norm(B - centre, axis=1) < radius
+    if not ma.any() or not mb.any():
+        raise ValueError("region is empty on at least one cloud; check `centre` "
+                         "is in the same frame and `radius` is not too small")
+    da, _ = cKDTree(B).query(A[ma])
+    db, _ = cKDTree(A).query(B[mb])
     return 0.5 * (da.mean() + db.mean())
 
 
