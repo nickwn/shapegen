@@ -88,7 +88,7 @@ def main():
     ap.add_argument("--limit", type=int, default=None)
     ap.add_argument("--holdout", type=int, default=40)
     ap.add_argument("--steps", type=int, default=20000)
-    ap.add_argument("--t-smooth", type=float, default=1e-3)
+    ap.add_argument("--t-smooth", type=float, default=1e-4)
     ap.add_argument("--sigma", type=float, default=0.0,
                     help="SH_FLOW_PLAN 4(b): variance floor on the target")
     ap.add_argument("--t-end", type=float, default=1.0,

@@ -35,7 +35,20 @@ Three stages, in this order, each measured on 200 subjects (train 160, held-out
                barely moves) because that floor IS the per-mesh scan noise:
                uncorrelated across subjects, so no basis can represent it, and it
                sits in the target. Smooth the target and the curve keeps falling
-               — 0.0038 at k=128, **2.8x better**.
+               — 0.0038 at k=128, **2.8x better**. (That 2.8x was scored against
+               the *smoothed* test face, so it is inflated by the same
+               moving-reference confound documented in :func:`build_dataset`;
+               treat it as directional. The ρ-codec figures below are scored
+               against the raw scan and are not.)
+
+               For ρ̂ the amount was swept properly — ``remesh=0.8``, L=32,
+               ``residual``, 6 heads, chamfer against the **raw** head, face
+               region in brackets: t=0 gives 0.02905 [0.02452], 1e-4 gives
+               0.02611 [**0.01727**], 3e-4 gives 0.02601 [0.01785], 1e-3 gives
+               0.02640 [0.01918], 1e-2 gives 0.02985 [0.02391]. So removing it
+               costs 29.6% on the face, and the old 1e-3 default was ten times
+               too strong — **1e-4** is the optimum and is worth 10% on the face
+               over 1e-3.
     encode     see :mod:`bottlegen.models.basis`.
 
 Caveat worth carrying: a large share of those 26317 vertices sit on the bald
@@ -221,7 +234,7 @@ def isotropic_remesh(V, F, target_pct: float = 0.8, iterations: int = 6):
             np.asarray(m.face_matrix(), dtype=np.int64))
 
 
-def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-3,
+def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-4,
                   align: bool = True, cap: bool = False, base: str = "native",
                   subdiv: int = 6, remesh: float | None = None,
                   limit: int | None = None, verbose: bool = False):

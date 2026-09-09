@@ -37,7 +37,7 @@ def genus(V, F) -> int:
     return Mesh(V, F).genus
 
 
-def chamfer(A, B, scale_align=False) -> float:
+def chamfer(A, B, scale_align=False, center=True) -> float:
     """Symmetric Chamfer (mean nearest-neighbor distance). ``scale_align``
     removes the global scale gauge (the decode fixes scale only up to |λ|²).
 
@@ -61,11 +61,17 @@ def chamfer(A, B, scale_align=False) -> float:
 
     Note ``A.mean(0)`` is the vertex mean, not the area-weighted centroid, so on a
     badly non-uniform mesh the centring is itself off — the cMCF sphere of a head
-    has 1e6x area spread and a vertex mean 0.35 from its centre. Pass clouds you
-    have centred yourself if that matters.
+    has 1e6x area spread and a vertex mean 0.35 from its centre. **Pass
+    ``center=False`` and centre the clouds yourself when the two have different
+    vertex distributions.** A FaceScape head carries 40% of its vertices in the
+    face while its icosphere resample is uniform, so the two vertex means differ
+    enough that this default shifted them apart and reported 0.155 where the
+    area-weighted centring gives 0.0152 — a 10x error that looks like a plausible
+    number, not like a bug.
     """
-    A = A - A.mean(0)
-    B = B - B.mean(0)
+    if center:
+        A = A - A.mean(0)
+        B = B - B.mean(0)
     if scale_align:
         A = A * np.sqrt((B ** 2).mean() / max((A ** 2).mean(), 1e-30))
     da, _ = cKDTree(B).query(A)

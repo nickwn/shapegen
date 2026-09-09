@@ -54,11 +54,32 @@ dominated by them:
   constraint — the error there is Gibbs ringing at the lip seam, eyelid creases
   and nostril, which no amount of target detail addresses.
 * **0.4% buys nothing over 0.8%** and costs 4x the vertices.
-* **Smoothing must stay on.** ``--t-smooth 0`` gives the *best* target of all
-  (face 0.00866, 35% better) and the *worst* decode (face 0.02325, 20% worse).
-  That is the per-subject scan noise: unrepresentable, and it destabilises the
-  encode. A crisper-looking decode that measures worse is high-frequency error,
-  not recovered detail.
+* **Smoothing must stay on, but 1e-3 was ten times too much.** Swept at
+  ``remesh=0.8``, L=32, ``residual``, 6 heads:
+
+    t_smooth |  whole: target   decode  |  face: target   decode
+       0     |       0.01521  0.02905   |      0.00866  0.02452
+       1e-4  |       0.01582  0.02611   |      0.00923  0.01727   <- default
+       3e-4  |       0.01618  0.02601   |      0.00973  0.01785
+       1e-3  |       0.01731  0.02640   |      0.01119  0.01918
+       3e-3  |       0.02010  0.02731   |      0.01472  0.02065
+       1e-2  |       0.02563  0.02985   |      0.02121  0.02391
+
+  Removing it entirely costs **29.6% on the face** and 10.1% whole-head. Going
+  from the old 1e-3 to 1e-4 is worth **10.0% on the face** and 1.1% whole-head.
+  Both metrics put the optimum in [1e-4, 3e-4]; 1e-4 wins the face by 3.3% and
+  loses whole-head by 0.4%, so the face decides it.
+
+  The interior optimum is a trade between two errors. The **target** degrades
+  monotonically with t (0.00866 -> 0.02121 on the face) and is charged for it in
+  full, since everything is scored against the raw scan. The **decode** improves
+  up to 1e-4 because H is a second derivative and amplifies per-subject scan
+  noise by ~l^2, which the encoder then spends bands chasing. Past 1e-4 the lost
+  detail dominates.
+
+  A crisper-looking decode that measures worse is high-frequency error, not
+  recovered detail — ``--t-smooth 0`` is the clearest case: best target of all,
+  worst decode of all.
 
 For L, see :func:`bottlegen.codec.encode` — **L=32 is the operating point**.
 L=40 costs 54% more coefficients for 1.6% on the whole head and is marginally
@@ -111,7 +132,7 @@ def main():
     ap.add_argument("--roots", nargs="+", required=True)
     ap.add_argument("--expressions", nargs="+", default=["1_neutral"])
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--t-smooth", type=float, default=1e-3)
+    ap.add_argument("--t-smooth", type=float, default=1e-4)
     ap.add_argument("--base", choices=("icosphere", "native"), default="icosphere")
     ap.add_argument("--subdiv", type=int, default=6)
     ap.add_argument("--remesh", type=float, default=0.8,
