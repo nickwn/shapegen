@@ -3,7 +3,7 @@
 A cMCF sphere inherits its source mesh's triangulation, which for a registered
 face set means **2.1e6x triangle-area spread** — areas down to 3.4e-9. Two stages
 of the codec divide by those areas: the Dirac assembly's ``-e_p e_q / (4 A_f)``,
-which reaches ``1/(4A) = 7.4e7``, and :func:`~bottlegen.geom.encode.sh_project`'s
+which reaches ``1/(4A) = 7.4e7``, and :func:`~shapegen.geom.encode.sh_project`'s
 Galerkin mass. Moving to a uniform icosphere (1.3x spread) is worth about **27%**
 of reconstruction error and flattens the error-vs-L curve, so the optimum sits at
 L=16-24 rather than 12.

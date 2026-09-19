@@ -209,7 +209,7 @@ load (all roots, all expressions)
   → NO align   rho cannot see rotation (section 2).
 ```
 
-`bottlegen/data/faces.py` (built) does load / normalise / smooth and skips
+`shapegen/data/faces.py` (built) does load / normalise / smooth and skips
 capping. It needs a `cap=True` path — reverting a choice made for the position
 model — plus an `expressions=` argument.
 
@@ -286,10 +286,10 @@ Still worth doing:
 
 | file | state | change |
 |---|---|---|
-| `bottlegen/models/flow.py` | built | none — it takes an `(N,K)` array and never sees a mesh |
-| `bottlegen/models/basis.py` | built | `RhoBasis` exists (shared sphere, band-wise whitening). Add the §4(b) variance floor and §4(c) truncated sampling |
-| `bottlegen/data/faces.py` | built | add `cap=True` and `expressions=` |
-| `bottlegen/codec.py` | **done** | `direct` default; `sphere` decides sphere policy; `n_jobs` pool |
+| `shapegen/models/flow.py` | built | none — it takes an `(N,K)` array and never sees a mesh |
+| `shapegen/models/basis.py` | built | `RhoBasis` exists (shared sphere, band-wise whitening). Add the §4(b) variance floor and §4(c) truncated sampling |
+| `shapegen/data/faces.py` | built | add `cap=True` and `expressions=` |
+| `shapegen/codec.py` | **done** | `direct` default; `sphere` decides sphere policy; `n_jobs` pool |
 | `scripts/encode_faces.py` | **done** | one-time encode → cached `.npz` |
 | `scripts/train_faces.py` | **done** | `--basis rho\|pca`, `--cache`, `--sigma`, `--t-end`, §8 checks |
 

@@ -11,8 +11,8 @@ against distributions whose answer is known in closed form, not against faces.
 import numpy as np
 import pytest
 
-from bottlegen.models.basis import PCABasis, RhoBasis
-from bottlegen.models.flow import (VelocityField, gaussian_baseline,
+from shapegen.models.basis import PCABasis, RhoBasis
+from shapegen.models.flow import (VelocityField, gaussian_baseline,
                                    sample_flow, train_flow)
 
 
@@ -204,8 +204,8 @@ def test_truncated_sampling_rescales_by_t_end_not_one_minus_t_end():
 # --------------------------------------------------------------------------- #
 
 def _bottles(n=6, subdiv=2):
-    from bottlegen import codec
-    from bottlegen.data.dataset import demo_bottle_meshes
+    from shapegen import codec
+    from shapegen.data.dataset import demo_bottle_meshes
     ms = demo_bottle_meshes(n=n, subdiv=subdiv, seed=0)
     return (np.stack([m.vertices for m in ms]), ms[0].faces,
             codec.template_sphere(subdiv))
@@ -221,7 +221,7 @@ def test_rho_codes_are_whitened_band_wise():
     under-weights those bands for precisely the reason whitening exists. Unit std
     per *coefficient* is NOT the invariant — within a band the spread is signal.
     """
-    from bottlegen import codec
+    from shapegen import codec
     X, F, S = _bottles()
     L = 6
     b = RhoBasis.fit(X, F, L, S)

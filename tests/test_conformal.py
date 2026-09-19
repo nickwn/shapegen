@@ -9,9 +9,9 @@ the conformal barycenter. The σ̂ route this file used to cover went with the
 import numpy as np
 import pytest
 
-from bottlegen.geom import conformal as cf
-from bottlegen.geom.mesh import Mesh, ellipsoid, icosphere
-from bottlegen.geom.operators import vertex_areas
+from shapegen.geom import conformal as cf
+from shapegen.geom.mesh import Mesh, ellipsoid, icosphere
+from shapegen.geom.operators import vertex_areas
 
 
 def bumpy(sub=4):

@@ -3,7 +3,7 @@
 Differentiating ``ρ ↦ λ`` means solving ``(A − γM) q = p`` for a cotangent ``q``,
 and that system is singular: the eigenproblem is quaternion-*linear*, so if
 ``Aλ = γMλ`` then ``A(λq) = γM(λq)`` for any constant quaternion ``q``. In the
-real 4×4 embedding :func:`~bottlegen.geom.dirac.left_matrix` builds — where the
+real 4×4 embedding :func:`~shapegen.geom.dirac.left_matrix` builds — where the
 operator is left multiplication and therefore commutes with right multiplication
 — the null space is spanned by ``λ·1, λ·i, λ·j, λ·k`` and is **4**-dimensional.
 (A complex 2N encoding of the same problem sees only 2 of these; deflating the
@@ -60,7 +60,7 @@ def null_basis(lam: np.ndarray) -> np.ndarray:
     """The four null directions ``λ·{1,i,j,k}`` of ``A − γM``. ``(n,4) → (4,n,4)``.
 
     Written out per vertex from ``(w,x,y,z)`` rather than called through
-    :func:`~bottlegen.spectral.quaternion.qmul`, because this sits inside every
+    :func:`~shapegen.spectral.quaternion.qmul`, because this sits inside every
     adjoint solve. The table encodes ``[w,x,y,z]`` storage with ``ij=k``; it is
     *checked* against ``qmul`` in the tests rather than trusted.
     """
@@ -78,7 +78,7 @@ class NullProjector:
     """Projectors off ``span{λ·1, λ·i, λ·j, λ·k}`` for a fixed ``λ``.
 
     ``lam`` is ``(n,4)``; ``mass`` the per-vertex lumped areas ``(n,)`` from
-    :func:`~bottlegen.geom.operators.vertex_areas` (the diagonal of the
+    :func:`~shapegen.geom.operators.vertex_areas` (the diagonal of the
     quaternionic mass, before the repeat-by-4).
 
     Only the M-orthogonal ``P`` and its plain-inner-product adjoint ``PT`` are
@@ -246,7 +246,7 @@ def stage_a_adjoint(dlam, V, F, rho, lam, gamma, shift=1e-9, canary_tol=1e-8,
 
         dJ/dρ_v = −⟨q, (∂A/∂ρ_v) λ⟩,
 
-    which is exactly :func:`~bottlegen.geom.dirac.dirac_grad_rho`. The ``dγ·Mλ``
+    which is exactly :func:`~shapegen.geom.dirac.dirac_grad_rho`. The ``dγ·Mλ``
     term drops because ``P`` leaves ``q`` M-orthogonal to the null space.
 
     **``J`` must be gauge-invariant** — invariant under ``λ → λq`` for constant

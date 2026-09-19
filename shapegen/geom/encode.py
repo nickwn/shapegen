@@ -1,11 +1,11 @@
 """The ρ encoder: ``mesh → ρ̂``, band-limited spherical-harmonic coefficients.
 
-This is the inverse of the decode in :mod:`bottlegen.geom.dirac`, and it is built
+This is the inverse of the decode in :mod:`shapegen.geom.dirac`, and it is built
 by *optimisation* rather than by a local formula. The local encoder
-(:func:`~bottlegen.geom.spin.mesh_to_rho_direct`, ``ρ = H e^u − 1``) minimises a
+(:func:`~shapegen.geom.spin.mesh_to_rho_direct`, ``ρ = H e^u − 1``) minimises a
 Dirac-consistency residual, which is not the quantity anyone reports.
 Minimising decoded *shape error* directly, through
-:func:`~bottlegen.geom.dirac_adjoint.decode_adjoint`, closes roughly half the gap
+:func:`~shapegen.geom.dirac_adjoint.decode_adjoint`, closes roughly half the gap
 they leave: measured on a bottle, 0.1095 → 0.0569.
 
 Encoding happens **in coefficient space at the target bandwidth**, not in vertex

@@ -39,12 +39,12 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bottlegen import codec                                    # noqa: E402
-from bottlegen.data import faces                               # noqa: E402
-from bottlegen.geom import dirac                               # noqa: E402
-from bottlegen.geom.mesh import Mesh                           # noqa: E402
-from bottlegen.models.basis import PCABasis, RhoBasis          # noqa: E402
-from bottlegen.models.flow import (gaussian_baseline,          # noqa: E402
+from shapegen import codec                                    # noqa: E402
+from shapegen.data import faces                               # noqa: E402
+from shapegen.geom import dirac                               # noqa: E402
+from shapegen.geom.mesh import Mesh                           # noqa: E402
+from shapegen.models.basis import PCABasis, RhoBasis          # noqa: E402
+from shapegen.models.flow import (gaussian_baseline,          # noqa: E402
                                    sample_flow, train_flow)
 
 _results = []

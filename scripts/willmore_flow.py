@@ -12,7 +12,7 @@ conformal curvature flow"). Each step is:
 Two things are worth understanding before reading the numbers.
 
 *The base surface is the mesh itself, not a sphere.* That is the whole structural
-difference from :mod:`bottlegen.geom.encode`, which spin-transforms a fixed base
+difference from :mod:`shapegen.geom.encode`, which spin-transforms a fixed base
 sphere *into* the target. Here there is no correspondence and no parameterisation
 -- the mesh is deformed in place -- which is why the flow needs no cMCF.
 
@@ -40,11 +40,11 @@ import time
 
 import numpy as np
 
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.eval import metrics
-from bottlegen.geom import dirac
-from bottlegen.geom.curvature import mean_curvature
-from bottlegen.geom.operators import cotan_laplacian, vertex_areas
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.eval import metrics
+from shapegen.geom import dirac
+from shapegen.geom.curvature import mean_curvature
+from shapegen.geom.operators import cotan_laplacian, vertex_areas
 
 FOURPI = 4.0 * np.pi
 
@@ -204,7 +204,7 @@ def main() -> None:
 
 def icosphere_reference(subdiv: int) -> dict:
     """Metrics on an exact discrete sphere — the real target, not W/4pi = 1."""
-    from bottlegen.geom.mesh import icosphere
+    from shapegen.geom.mesh import icosphere
     m = icosphere(subdiv)
     V = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
     return {"residual": sphere_fit_residual(V),

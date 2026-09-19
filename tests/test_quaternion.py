@@ -2,7 +2,7 @@
 
 import numpy as np
 
-from bottlegen.spectral import quaternion as Q
+from shapegen.spectral import quaternion as Q
 
 ONE = np.array([1.0, 0, 0, 0])
 I = np.array([0.0, 1, 0, 0])

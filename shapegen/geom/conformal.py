@@ -17,7 +17,7 @@ freedom removed.
 
 ``scripts/willmore_flow.py`` offers an alternative to step 1 via the spin
 transform, with slightly lower quasi-conformal distortion on a bottle (0.017 vs
-0.019). It is not wired into :func:`~bottlegen.codec.base_sphere`: qc does not
+0.019). It is not wired into :func:`~shapegen.codec.base_sphere`: qc does not
 predict reconstruction accuracy, so that gap buys nothing.
 """
 

@@ -26,9 +26,9 @@ from pathlib import Path
 
 import numpy as np
 
-from bottlegen import codec
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.eval.metrics import flip_fraction, genus
+from shapegen import codec
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.eval.metrics import flip_fraction, genus
 
 
 def validate_samples(coeffs, sphere, faces, n=12, seed=0, radii=None):
@@ -85,7 +85,7 @@ def main() -> None:
     args = ap.parse_args()
 
     if args.facescape:
-        from bottlegen.data.registered import load_facescape  # noqa: PLC0415
+        from shapegen.data.registered import load_facescape  # noqa: PLC0415
         meshes = load_facescape(args.facescape, expression=args.expression,
                                 limit=args.n, verbose=True)
         template = None                     # no icosphere matches; codec derives one

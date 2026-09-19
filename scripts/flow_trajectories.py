@@ -52,9 +52,9 @@ from pathlib import Path
 
 import numpy as np
 
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.geom import conformal as cf, encode as enc, spin
-from bottlegen.geom.mesh import Mesh
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.geom import conformal as cf, encode as enc, spin
+from shapegen.geom.mesh import Mesh
 from scripts.willmore_flow import flow_trajectory, sphere_fit_residual
 
 

@@ -9,13 +9,13 @@ composite finite-difference check interpretable when it eventually fails.
 import numpy as np
 import pytest
 
-from bottlegen.geom import dirac
-from bottlegen.geom import dirac_adjoint as da
-from bottlegen.geom.dirac_adjoint import NullProjector, null_basis
-from bottlegen.geom.operators import edge_cotan_weights
-from bottlegen.geom.mesh import icosphere
-from bottlegen.geom.operators import vertex_areas
-from bottlegen.spectral.quaternion import qmul
+from shapegen.geom import dirac
+from shapegen.geom import dirac_adjoint as da
+from shapegen.geom.dirac_adjoint import NullProjector, null_basis
+from shapegen.geom.operators import edge_cotan_weights
+from shapegen.geom.mesh import icosphere
+from shapegen.geom.operators import vertex_areas
+from shapegen.spectral.quaternion import qmul
 
 
 def _sphere(sub):

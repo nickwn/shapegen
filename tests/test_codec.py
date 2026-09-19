@@ -8,8 +8,8 @@ façade reproduces the error it reports, and the convergence flag is honest.
 import numpy as np
 import pytest
 
-from bottlegen import codec
-from bottlegen.data.dataset import demo_bottle_meshes
+from shapegen import codec
+from shapegen.data.dataset import demo_bottle_meshes
 
 
 def test_roundtrip_reproduces_the_reported_error():
@@ -63,7 +63,7 @@ def test_base_sphere_is_gauge_fixed_and_round():
     sphere's; centring the sphere's own vertices instead would leave the ℓ=1
     Möbius freedom alive and the codes incomparable.
     """
-    from bottlegen.geom.operators import vertex_areas
+    from shapegen.geom.operators import vertex_areas
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
     w = vertex_areas(mesh.vertices, mesh.faces)
     w = w / w.sum()
@@ -177,8 +177,8 @@ def test_chamfer_scale_align_is_vertex_count_independent():
     itself uses. It breaks precisely where chamfer is otherwise the right tool:
     comparing decodes on differently-sized meshes.
     """
-    from bottlegen.eval.metrics import chamfer
-    from bottlegen.geom.mesh import icosphere
+    from shapegen.eval.metrics import chamfer
+    from shapegen.geom.mesh import icosphere
     u = lambda s: (lambda m: m.vertices / np.linalg.norm(  # noqa: E731
         m.vertices, axis=1, keepdims=True))(icosphere(s))
     A, B = u(4), u(5)
@@ -199,8 +199,8 @@ def test_decode_is_mesh_independent_when_rho_is_realisable():
     vertex-spacing floor, while γ=2.2e-2 puts it 0.057 above.
     """
     from scipy.spatial import cKDTree
-    from bottlegen.geom.mesh import icosphere
-    from bottlegen.geom.operators import vertex_areas
+    from shapegen.geom.mesh import icosphere
+    from shapegen.geom.operators import vertex_areas
 
     def norm_shape(V, F):
         w = vertex_areas(V, F)
@@ -232,7 +232,7 @@ def test_nose_tip_picks_the_dense_end_not_the_far_end():
     of 1% of vertices and a 17% improvement that measured the back of the skull.
     """
     import numpy as np
-    from bottlegen.eval.metrics import nose_tip
+    from shapegen.eval.metrics import nose_tip
 
     rng = np.random.default_rng(0)
     # A dense cluster near z=+1 and a lone spike further out at z=-1.4.
@@ -246,7 +246,7 @@ def test_nose_tip_picks_the_dense_end_not_the_far_end():
 def test_chamfer_region_is_restricted_and_rejects_an_empty_region():
     import numpy as np
     import pytest
-    from bottlegen.eval.metrics import chamfer, chamfer_region
+    from shapegen.eval.metrics import chamfer, chamfer_region
 
     rng = np.random.default_rng(1)
     A = rng.normal(size=(500, 3))

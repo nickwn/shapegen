@@ -10,10 +10,10 @@ nothing downstream may use the decode engine until it passes.
 import numpy as np
 import pytest
 
-from bottlegen.geom import dirac
-from bottlegen.geom.curvature import mean_curvature
-from bottlegen.geom.mesh import icosphere
-from bottlegen.geom.operators import vertex_areas
+from shapegen.geom import dirac
+from shapegen.geom.curvature import mean_curvature
+from shapegen.geom.mesh import icosphere
+from shapegen.geom.operators import vertex_areas
 
 
 # --------------------------------------------------------------------------- #
@@ -127,7 +127,7 @@ def test_spin_transform_is_differentiable_in_rho():
 
     ``spla.eigsh`` returns an arbitrary member of the 4-dimensional eigenspace
     (the right-ℍ action), and that choice is *not* continuous in ρ. What makes
-    the map differentiable anyway is :func:`~bottlegen.geom.dirac._gauge_fix`:
+    the map differentiable anyway is :func:`~shapegen.geom.dirac._gauge_fix`:
     dividing by the mean spinor is a canonical section, so the arbitrary factor
     cancels before anything downstream sees it.
 
@@ -236,7 +236,7 @@ def test_known_conformal_map_reproduced():
 def _integrate_target_edges(V, F, Vtarget):
     """Cotan-Poisson integrate the exact edges of ``Vtarget`` on the (V,F)
     connectivity (an integrability/round-trip check of the Poisson solver)."""
-    from bottlegen.geom.operators import cotan_laplacian, edge_cotan_weights
+    from shapegen.geom.operators import cotan_laplacian, edge_cotan_weights
     L, _ = cotan_laplacian(V, F)
     edges, w = edge_cotan_weights(V, F)
     i, j = edges[:, 0], edges[:, 1]

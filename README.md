@@ -71,8 +71,8 @@ The generative half is **not built yet**. See [SH_FLOW_PLAN.md](SH_FLOW_PLAN.md)
 ## Quickstart
 
 ```python
-from bottlegen import codec
-from bottlegen.data.dataset import demo_bottle_meshes
+from shapegen import codec
+from shapegen.data.dataset import demo_bottle_meshes
 
 mesh   = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
 sphere = codec.base_sphere(mesh)                          # cMCF + Möbius gauge fix
@@ -132,13 +132,13 @@ space — and optimises ρ̂ against decoded shape error directly.
 
 | path | what |
 |---|---|
-| `bottlegen/codec.py` | the public API — `encode`, `decode`, `base_sphere`, `shape_error` |
-| `bottlegen/geom/dirac.py` | Dirac operator, spin transform, edge integration |
-| `bottlegen/geom/dirac_adjoint.py` | adjoint of the decode |
-| `bottlegen/geom/encode.py` | SH basis, projection, the optimising encoder |
-| `bottlegen/geom/conformal.py` | cMCF, Möbius normalisation, Gu–Yau |
-| `bottlegen/data/` | demo bottles, registered-dataset loaders (FaceScape) |
-| `bottlegen/models/` | flow matching over code vectors *(new, unlanded)* |
+| `shapegen/codec.py` | the public API — `encode`, `decode`, `base_sphere`, `shape_error` |
+| `shapegen/geom/dirac.py` | Dirac operator, spin transform, edge integration |
+| `shapegen/geom/dirac_adjoint.py` | adjoint of the decode |
+| `shapegen/geom/encode.py` | SH basis, projection, the optimising encoder |
+| `shapegen/geom/conformal.py` | cMCF, Möbius normalisation, Gu–Yau |
+| `shapegen/data/` | demo bottles, registered-dataset loaders (FaceScape) |
+| `shapegen/models/` | flow matching over code vectors *(new, unlanded)* |
 | `scripts/` | evaluation sweeps, Willmore flow, dataset builds |
 
 ## Things that are true and unobvious
@@ -164,11 +164,11 @@ the code where it matters.
 
 ## A note on the name
 
-`bottlegen` is historical — the project began generating bottles, which are a
+`shapegen` is historical — the project began generating bottles, which are a
 convenient non-star-shaped genus-0 test case. The goal is generic shapes, and the
 current target is faces. Renaming is pending.
 
 ## Requirements
 
-NumPy and SciPy for the codec; PyTorch only for `bottlegen/models/`. Tests:
+NumPy and SciPy for the codec; PyTorch only for `shapegen/models/`. Tests:
 `python -m pytest tests/`.

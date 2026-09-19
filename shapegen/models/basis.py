@@ -1,6 +1,6 @@
 """The representation layer: meshes <-> coefficient vectors.
 
-The generative model in :mod:`bottlegen.models.flow` never sees a mesh — it sees
+The generative model in :mod:`shapegen.models.flow` never sees a mesh — it sees
 an ``(N, K)`` matrix of codes. Everything that decides *what those codes mean*
 lives here, so swapping the representation is swapping one object.
 
@@ -14,7 +14,7 @@ Two implementations of the same interface:
     solved correspondence, which registered datasets have by construction.
 
 ``RhoBasis``
-    ρ̂, the spin-transform code, via :mod:`bottlegen.codec`. Needs no
+    ρ̂, the spin-transform code, via :mod:`shapegen.codec`. Needs no
     correspondence, works on unregistered genus-0 shapes, always decodes to *some*
     surface, and hands you γ as a free validity score. Less accurate on registered
     faces than PCA — that is the trade — but it is the path that generalises off a
@@ -86,7 +86,7 @@ class PCABasis:
 
 
 class RhoBasis:
-    """ρ̂ codes from :mod:`bottlegen.codec`, on one shared template sphere.
+    """ρ̂ codes from :mod:`shapegen.codec`, on one shared template sphere.
 
     The sphere is fixed at fit time and travels with the basis, because ρ̂ is
     defined *relative to* a base sphere: decoding against a different

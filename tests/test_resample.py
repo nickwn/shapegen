@@ -9,8 +9,8 @@ is zero" from deep inside the decode -- with nothing in between to say why.
 
 import numpy as np
 
-from bottlegen.geom.mesh import icosphere, triangle_areas
-from bottlegen.geom.resample import locate_on_sphere, resample_to
+from shapegen.geom.mesh import icosphere, triangle_areas
+from shapegen.geom.resample import locate_on_sphere, resample_to
 
 
 def _unit(sub):
@@ -103,7 +103,7 @@ def test_locate_on_mesh_is_exact_on_self():
     composed remesh -> icosphere transfer in `faces.build_dataset` silently moves
     every vertex.
     """
-    from bottlegen.geom.resample import locate_on_mesh
+    from shapegen.geom.resample import locate_on_mesh
     V, F = _unit(3)
     idx, w, dmax = locate_on_mesh(V, F, V)
     rec = (V[F[idx]] * w[:, :, None]).sum(1)
@@ -122,7 +122,7 @@ def test_composed_transfer_preserves_the_surface():
     silently scaled toward the origin, which no shape-error metric would flag
     because Procrustes removes scale.
     """
-    from bottlegen.geom.resample import locate_on_mesh, locate_on_sphere
+    from shapegen.geom.resample import locate_on_mesh, locate_on_sphere
     V, F = _unit(3)                      # stand-in for the "head"
     M, FM = _unit(4)                     # stand-in for its remesh
     P, _ = _unit(2)                      # icosphere directions

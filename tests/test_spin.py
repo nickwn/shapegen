@@ -9,9 +9,9 @@ its ``ρ`` was a 1/length² quantity rather than a curvature.
 import numpy as np
 import pytest
 
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.geom import conformal as cf, dirac, spin
-from bottlegen.geom.mesh import icosphere
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.geom import conformal as cf, dirac, spin
+from shapegen.geom.mesh import icosphere
 
 
 def _unit_sphere(sub):
@@ -145,7 +145,7 @@ def test_dirac_residual_converges_on_real_meshes():
 def test_mesh_to_rho_decodes_back_to_the_input():
     """End-to-end encode → decode on a real (non-star-shaped) bottle."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    from bottlegen import codec
+    from shapegen import codec
     sph = codec.base_sphere(mesh)
     rho = spin.mesh_to_rho_direct(mesh, sph)
     lam, gamma = dirac.spin_transform(sph, mesh.faces, rho)
@@ -168,8 +168,8 @@ def test_base_sphere_residual_flags_a_degenerate_sphere():
     L and why its per-band error looked (implausibly) large at l=10 on a mesh
     whose Nyquist is l~80.
     """
-    from bottlegen.geom.mesh import icosphere
-    from bottlegen.geom.spin import base_sphere_residual
+    from shapegen.geom.mesh import icosphere
+    from shapegen.geom.spin import base_sphere_residual
     for sub in (2, 3, 4):
         m = icosphere(sub)
         P = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)

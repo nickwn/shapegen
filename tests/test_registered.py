@@ -8,9 +8,9 @@ topology mismatch would corrupt an encoded dataset without raising anything.
 import numpy as np
 import pytest
 
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.data.registered import check_registered, read_ply
-from bottlegen.geom.mesh import Mesh, icosphere
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.data.registered import check_registered, read_ply
+from shapegen.geom.mesh import Mesh, icosphere
 
 
 def _write_ply(path, V, F, binary=True):

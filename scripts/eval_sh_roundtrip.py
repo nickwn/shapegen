@@ -36,8 +36,8 @@ import time
 
 import numpy as np
 
-from bottlegen.data.dataset import demo_bottle_meshes
-from bottlegen.geom import conformal as cf, encode as enc, spin
+from shapegen.data.dataset import demo_bottle_meshes
+from shapegen.geom import conformal as cf, encode as enc, spin
 
 
 def resolvable_degree(n: int) -> float:

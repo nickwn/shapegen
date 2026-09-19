@@ -3,7 +3,7 @@
 Learns a **velocity field** that transports Gaussian noise to the data
 distribution, then samples by integrating it. Nothing here knows what the codes
 mean — it sees an ``(N, K)`` array — so the representation is chosen in
-:mod:`bottlegen.models.basis` and swapped there.
+:mod:`shapegen.models.basis` and swapped there.
 
 The method, in one paragraph. Pick a data point ``z1`` and a noise sample
 ``z0 ~ N(0, I)``, join them with a straight line ``z_t = (1-t) z0 + t z1``, and

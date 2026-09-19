@@ -116,7 +116,7 @@ def base_sphere(mesh, iters: int = 300) -> np.ndarray:
     transform) was removed. It was selected on quasi-conformal distortion, where
     it wins narrowly on a bottle at subdiv 3 (0.0170 against cMCF's 0.0194) — but
     qc turns out not to predict reconstruction accuracy at all (see
-    :func:`~bottlegen.geom.spin.qc_distortion`), so the gap bought nothing, and
+    :func:`~shapegen.geom.spin.qc_distortion`), so the gap bought nothing, and
     reaching it made this package import from ``scripts/``. The flow itself is
     still there as ``scripts/willmore_flow.py`` if you want to experiment.
     """
@@ -131,7 +131,7 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 200,
     Three encoders:
 
     * ``"direct"`` — ``ρ = H·e^u − 1`` read straight off the geometry,
-      with ``e^u`` from :func:`~bottlegen.geom.conformal.u_edge_lsq`. Closed-form,
+      with ``e^u`` from :func:`~shapegen.geom.conformal.u_edge_lsq`. Closed-form,
       so nothing to converge and no iteration cap to police (``niter`` is 0 and
       means it). A measurement of a continuum quantity, so it converges under
       refinement and stays **comparable across meshes** (per-band coefficients

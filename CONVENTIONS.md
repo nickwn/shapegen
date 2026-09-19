@@ -1,6 +1,6 @@
 # CONVENTIONS.md — authoritative; never drift
 
-These are the fixed conventions for `bottlegen`, a codec mapping genus-0 surfaces
+These are the fixed conventions for `shapegen`, a codec mapping genus-0 surfaces
 to band-limited spherical-harmonic coefficients of ρ. Every kernel must conform;
 tests assert them. If a library disagrees, wrap it and verify against these.
 

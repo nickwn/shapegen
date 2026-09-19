@@ -1,6 +1,6 @@
 """Spin-transform *encode*: ``(sphere, mesh) → λ → ρ``.
 
-The decode side (:mod:`bottlegen.geom.dirac`) turns a per-vertex curvature
+The decode side (:mod:`shapegen.geom.dirac`) turns a per-vertex curvature
 change ``ρ`` on the base sphere into an immersion. This module inverts it.
 
 A conformal correspondence ``f₀: S² → M`` is by definition a spin transform:
@@ -10,14 +10,14 @@ similarity part of that face's affine map — no solve. Adjacent faces must agre
 on the sign of ``λ`` (the ±λ ambiguity is the spin structure); on a genus-0
 surface a consistent choice exists globally and is fixed by one BFS over the
 dual graph. Averaging to vertices and projecting with
-:func:`~bottlegen.geom.dirac.rho_from_lambda` gives ``ρ``.
+:func:`~shapegen.geom.dirac.rho_from_lambda` gives ``ρ``.
 
 Deliberately convention-free: ``ρ`` is defined by whatever operator
 ``dirac.py`` assembles, so the encode stays consistent with the decode by
 construction rather than by a calibrated multiplier.
 
 The correspondence itself comes from
-:func:`~bottlegen.geom.conformal.spherical_conformal_map` (cMCF). Its
+:func:`~shapegen.geom.conformal.spherical_conformal_map` (cMCF). Its
 quasi-conformal distortion is the shear that :func:`face_lambdas` discards — but
 it is **not** the accuracy floor of the round trip, and reading it as one is
 measurably wrong in both directions. See :func:`qc_distortion`.
@@ -203,7 +203,7 @@ def qc_distortion(S, T, F):
 
     Useful for comparing two parameterisations of the *same* mesh, where that bias
     is shared. Do not use it as a health check, and do not tune a parameterisation
-    on it: :func:`~bottlegen.geom.conformal.guyau` improves qc 22% and makes
+    on it: :func:`~shapegen.geom.conformal.guyau` improves qc 22% and makes
     reconstruction slightly worse.
     """
     def local(V):
@@ -227,7 +227,7 @@ def mesh_to_rho_direct(mesh, sph, return_diagnostics=False):
     * ``H`` — signed mean curvature of the **target** mesh, calibrated so a unit
       sphere gives ``H = +1`` (``CONVENTIONS.md``: outward normal, convex-positive);
     * ``e^u`` — the conformal factor of the map ``sph → mesh``, from
-      :func:`~bottlegen.geom.conformal.u_edge_lsq`, which solves
+      :func:`~shapegen.geom.conformal.u_edge_lsq`, which solves
       ``(u_i+u_j)/2 = log(|B_j−B_i|/|S_j−S_i|)`` over every edge and is exact to
       3e-16 on conformal input (a lumped area ratio carries the full O(h²) of the
       mass lumping, and ρ inherits it directly);

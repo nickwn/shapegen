@@ -8,10 +8,10 @@ local encoder it starts from.
 import numpy as np
 import pytest
 
-from bottlegen.geom import encode as enc
-from bottlegen.geom import spin
-from bottlegen.geom.mesh import icosphere
-from bottlegen.geom.operators import vertex_areas
+from shapegen.geom import encode as enc
+from shapegen.geom import spin
+from shapegen.geom.mesh import icosphere
+from shapegen.geom.operators import vertex_areas
 
 
 def _sphere(sub):
@@ -101,7 +101,7 @@ def test_procrustes_is_similarity_invariant():
 def test_encode_sh_beats_its_initialiser():
     """The whole point of the optimised encoder: it must improve on the local
     encoder it starts from, on a real non-star-shaped mesh."""
-    from bottlegen.data.dataset import demo_bottle_meshes
+    from shapegen.data.dataset import demo_bottle_meshes
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     out = enc.encode_sh(mesh, L=8, maxiter=20)
     print(f"[encode L=8] init={out['err0']:.4f} -> {out['err']:.4f} "
@@ -121,7 +121,7 @@ def test_decode_sh_inverts_encode_sh(alpha):
     by mistake would still look like a plausible coefficient vector, but would
     decode to a different mesh.
     """
-    from bottlegen.data.dataset import demo_bottle_meshes
+    from shapegen.data.dataset import demo_bottle_meshes
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     out = enc.encode_sh(mesh, L=8, maxiter=20, alpha=alpha)
     X = enc.decode_sh(out["coeffs"], out["sph"], mesh.faces, L=8)
@@ -153,7 +153,7 @@ def test_precond_does_not_change_the_problem():
     ``maxiter=0``: scipy's L-BFGS-B still takes one step at maxiter=0 (nit=1),
     and that step legitimately differs between metrics.
     """
-    from bottlegen.data.dataset import demo_bottle_meshes
+    from shapegen.data.dataset import demo_bottle_meshes
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
     a = enc.encode_sh(mesh, L=4, maxiter=1, alpha=0.0)
     b = enc.encode_sh(mesh, L=4, maxiter=1, alpha=0.75, sph=a["sph"])
@@ -167,7 +167,7 @@ def test_precond_reaches_lower_error_in_a_fixed_budget():
     bandwidth (that is the whole point), and at L=12 with a generous budget both
     settle near the same value, which would make this a coin-flip.
     """
-    from bottlegen.data.dataset import demo_bottle_meshes
+    from shapegen.data.dataset import demo_bottle_meshes
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     sph = enc.encode_sh(mesh, L=2, maxiter=1)["sph"]
     plain = enc.encode_sh(mesh, L=16, maxiter=25, alpha=0.0, sph=sph)
@@ -185,7 +185,7 @@ def test_direct_encoder_is_exact_on_spheres():
     valence-5 vertices are a fixed tessellation artifact whose curvature error
     does not shrink (exactly 12 vertices exceed 0.05 at every resolution).
     """
-    from bottlegen.geom.mesh import Mesh, icosphere
+    from shapegen.geom.mesh import Mesh, icosphere
     prev = None
     for sub in (2, 3, 4):
         m = icosphere(sub)

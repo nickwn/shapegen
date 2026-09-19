@@ -81,7 +81,7 @@ dominated by them:
   recovered detail — ``--t-smooth 0`` is the clearest case: best target of all,
   worst decode of all.
 
-For L, see :func:`bottlegen.codec.encode` — **L=32 is the operating point**.
+For L, see :func:`shapegen.codec.encode` — **L=32 is the operating point**.
 L=40 costs 54% more coefficients for 1.6% on the whole head and is marginally
 worse on the face. The old "gamma under 1e-2" rule applied to ``direct`` only;
 ``residual`` is still improving at gamma 4.8e-2.
@@ -103,8 +103,8 @@ worse on the face. The old "gamma under 1e-2" rule applied to ``direct`` only;
 
    A fourth trap, of the same family: a **whole-head** mean is dominated by the
    cranium and neck, so it can move a lot while the face does not move at all.
-   Report :func:`~bottlegen.eval.metrics.chamfer_region` about
-   :func:`~bottlegen.eval.metrics.nose_tip` alongside it. Getting the tip on the
+   Report :func:`~shapegen.eval.metrics.chamfer_region` about
+   :func:`~shapegen.eval.metrics.nose_tip` alongside it. Getting the tip on the
    wrong end of the depth axis scores the occiput and reports gains that are not
    about the face — that happened too.
 """
@@ -120,11 +120,11 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from bottlegen import codec                                    # noqa: E402
-from bottlegen.data import faces                               # noqa: E402
-from bottlegen.geom.mesh import Mesh                           # noqa: E402
-from bottlegen.geom import spin                               # noqa: E402
-from bottlegen.models.basis import RhoBasis                    # noqa: E402
+from shapegen import codec                                    # noqa: E402
+from shapegen.data import faces                               # noqa: E402
+from shapegen.geom.mesh import Mesh                           # noqa: E402
+from shapegen.geom import spin                               # noqa: E402
+from shapegen.models.basis import RhoBasis                    # noqa: E402
 
 
 def main():

@@ -7,9 +7,9 @@ differential tests that lived here covered the σ̂ machinery and went with it.
 import numpy as np
 import pytest
 
-from bottlegen.geom import curvature as cv
-from bottlegen.geom.mesh import ellipsoid, icosphere
-from bottlegen.geom.operators import cotan_laplacian, vertex_areas
+from shapegen.geom import curvature as cv
+from shapegen.geom.mesh import ellipsoid, icosphere
+from shapegen.geom.operators import cotan_laplacian, vertex_areas
 
 
 # --------------------------------------------------------------------------- #

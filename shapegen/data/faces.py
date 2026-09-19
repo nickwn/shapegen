@@ -49,7 +49,7 @@ Three stages, in this order, each measured on 200 subjects (train 160, held-out
                costs 29.6% on the face, and the old 1e-3 default was ten times
                too strong — **1e-4** is the optimum and is worth 10% on the face
                over 1e-3.
-    encode     see :mod:`bottlegen.models.basis`.
+    encode     see :mod:`shapegen.models.basis`.
 
 Caveat worth carrying: a large share of those 26317 vertices sit on the bald
 cranium and neck, which are nearly featureless and nearly identical between
@@ -257,14 +257,14 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-4,
        Scoring a decode against that output therefore grades coarser settings on a
        softer reference, and will report improvements that are not real — it did,
        three times, by 25-32%. **Compare against the original input with a
-       topology-free metric** (:func:`~bottlegen.eval.metrics.chamfer`), never
+       topology-free metric** (:func:`~shapegen.eval.metrics.chamfer`), never
        against what this function returned.
 
        **And score the face separately.** Most of these 26321 vertices are bald
        cranium and neck, so a whole-head mean moves for reasons unrelated to the
        face: 2.5% -> 0.8% is worth 8% whole-head and **0%** on the face. Use
-       :func:`~bottlegen.eval.metrics.chamfer_region` about
-       :func:`~bottlegen.eval.metrics.nose_tip` alongside the whole-head number.
+       :func:`~shapegen.eval.metrics.chamfer_region` about
+       :func:`~shapegen.eval.metrics.nose_tip` alongside the whole-head number.
 
     ``base="icosphere"`` resamples every mesh onto a uniform icosphere at
     ``subdiv``, returning ``(X, F, sphere)`` instead of ``(X, F)``. The cMCF sphere
