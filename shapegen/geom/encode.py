@@ -92,22 +92,37 @@ def real_sh_basis(V: np.ndarray, L: int) -> np.ndarray:
     # here -- we only ever fit and re-synthesise in the *same* basis -- but
     # matching the standard keeps the coefficients comparable to other tools.)
     root2 = np.sqrt(2.0)
-    cols = []
-    # Loop order defines the coefficient layout, and that layout is load-bearing:
-    # degree ascending, m from -l to +l, so the first (L'+1)^2 columns form the
-    # bandwidth-L' basis and callers can slice instead of rebuilding.
+
+    # The complex harmonics come from the spin-0 SWSH basis, not from a
+    # per-(l,m) scipy call. Both give the same numbers -- `sph_harm_y` is the
+    # oracle `swsh` is tested against at spin 0 -- but `eval_basis` walks the
+    # whole l ladder per m in one stable recurrence (PLAN.md §P8.1) instead of
+    # evaluating (L+1)^2 harmonics independently. Measured on the 40962-vertex
+    # ico6 sphere at L=32, the sphere and band this project actually uses:
+    # **43.9s -> 1.1s**. That cost was a third of the runtime of a single-face
+    # quad-mesh build, and it is paid again for every new sphere.
+    from ..spectral.swsh import eval_basis, mode_list
+
+    Yc = eval_basis(0, L, theta, phi)
+    col_of = {lm: i for i, lm in enumerate(mode_list(0, L))}
+    out = np.empty((theta.size, (L + 1) ** 2))
+    # Column order is load-bearing: degree ascending, m from -l to +l, so the
+    # first (L'+1)^2 columns form the bandwidth-L' basis and callers can slice
+    # instead of rebuilding.
+    k = 0
     for l in range(L + 1):
         for m in range(-l, l + 1):
             if m == 0:
                 # m = 0 is already real; no sqrt(2), no phase.
-                cols.append(np.real(sph_harm_y(l, 0, theta, phi)))
+                out[:, k] = Yc[:, col_of[(l, 0)]].real
             elif m > 0:
-                cols.append(root2 * (-1) ** m * np.real(sph_harm_y(l, m, theta, phi)))
+                out[:, k] = root2 * (-1) ** m * Yc[:, col_of[(l, m)]].real
             else:
-                # Note the +|m| passed to scipy: the sin partner comes from the
-                # imaginary part of the *positive*-order harmonic.
-                cols.append(root2 * (-1) ** m * np.imag(sph_harm_y(l, -m, theta, phi)))
-    return np.column_stack(cols)
+                # the sin partner comes from the imaginary part of the
+                # *positive*-order harmonic
+                out[:, k] = root2 * (-1) ** m * Yc[:, col_of[(l, -m)]].imag
+            k += 1
+    return out
 
 
 def sh_project(rho: np.ndarray, Y: np.ndarray, mass: np.ndarray | None = None):
