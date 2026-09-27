@@ -71,12 +71,6 @@ def main() -> None:
     ap.add_argument("--L", type=int, default=12, help="SH bandwidth of the latent")
     ap.add_argument("--maxiter", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--facescape", type=str, default=None,
-                    help="path to a facescape_trainset_* directory; uses the "
-                         "registered models, hole-filled")
-    ap.add_argument("--expression", type=str, default="1_neutral",
-                    help="which FaceScape expression (single-expression subsets "
-                         "avoid the varying mouth cap)")
     ap.add_argument("--method", choices=("adjoint", "local"), default="adjoint",
                     help="adjoint: one shared sphere, ~19 s/mesh, more accurate. "
                          "local: per-mesh cMCF measurement, ~0.7 s/mesh, codes "
@@ -84,14 +78,8 @@ def main() -> None:
     ap.add_argument("--out", type=str, default="reports/dataset.npz")
     args = ap.parse_args()
 
-    if args.facescape:
-        from shapegen.data.registered import load_facescape  # noqa: PLC0415
-        meshes = load_facescape(args.facescape, expression=args.expression,
-                                limit=args.n, verbose=True)
-        template = None                     # no icosphere matches; codec derives one
-    else:
-        meshes = demo_bottle_meshes(n=args.n, subdiv=args.subdiv, seed=args.seed)
-        template = codec.template_sphere(args.subdiv)
+    meshes = demo_bottle_meshes(n=args.n, subdiv=args.subdiv, seed=args.seed)
+    template = codec.template_sphere(args.subdiv)
     faces = meshes[0].faces
     K = codec.n_coeffs(args.L)
     print(f"{len(meshes)} shapes, {len(meshes[0].vertices)} verts, "
