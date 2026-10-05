@@ -1,26 +1,19 @@
 """Mesh-free cone placement: a spin-4 cross field found by spectral
-Ginzburg-Landau annealing (PLAN.md §P8.3/§P8.4, ported from
-``03_spectral/solver.py`` and ``gl_spec.py``).
+Ginzburg-Landau annealing, cones read off its zeros, and the metrics that
+score a cone set (ported from ``03_spectral/solver.py``
+and ``gl_spec.py``).
 
-**Deliberately not included**: ``03_spectral/blend.py``'s smoothness/alignment
-control ``t`` (§P8.6). That term biases the flow towards the Hopf differential
-of ρ; this module only anneals ``ψ`` towards unit modulus, which is what
-``gl_spec.py`` itself does before ``blend.py`` is layered on top.
-
-The field ``ψ`` is spin-4 (a "cross" — 4-fold rotational symmetry — raised to
-the 4th power, so it is single-valued). Its connection, for an immersion
-conformal to the round sphere, is ``∇ = ∇₀ - i·s·A`` with ``A = i·ð(φ)``, ``φ``
-the potential of the curvature-density perturbation ``μ - 1``:
+The field ``ψ`` is spin-4 (a cross raised to the 4th power, so single-valued).
+Its connection, for an immersion conformal to the round sphere with conformal
+potential ``φ`` (:func:`curvature_potential`), is ``∇ = ∇₀ - i·s·A`` with
+``A = i·ð(φ)``:
 
     C ψ = -Δ₀ψ + s²|A|²ψ + 2is·(A·∇₀ψ),   A·∇₀ψ = ½(Ā·ðψ + A·ð̄ψ)
 
-``div A = 0`` because ``A`` is a rotated gradient, so there is no extra term.
+``div A = 0`` (``A`` is a rotated gradient), so there is no extra term.
 
-**The linearisation this inherits, unfixed.** ``φ`` solves ``Δ₀φ = μ - 1`` with
-``μ = 1 + 2ρ`` — the bundle's own linearisation, not this repo's exact spin
-transform. PLAN.md §2.1: "It does not fix the mesh-free path... replacing
-*that* is §P9." So ``curvature_potential`` takes ``ρ̂`` (this repo's real-SH
-convention) and applies ``μ = 1 + 2ρ`` directly, with no correction.
+Not included: ``blend.py``'s smoothness/alignment control; this module
+only anneals ``ψ`` towards unit modulus.
 """
 
 from __future__ import annotations
@@ -43,7 +36,7 @@ __all__ = [
 
 
 # --------------------------------------------------------------------------- #
-# The real/complex coefficient boundary (§2.3/§P8.1's "one conversion pair")   #
+# The real/complex coefficient boundary (the "one conversion pair")          #
 # --------------------------------------------------------------------------- #
 
 def real_to_complex(c: np.ndarray, L: int) -> np.ndarray:
@@ -59,9 +52,8 @@ def real_to_complex(c: np.ndarray, L: int) -> np.ndarray:
         C[l, l+m] = (-1)^m/√2 · (c[+m] - i·c[-m])
         C[l, l-m] = 1/√2      · (c[+m] + i·c[-m])
 
-    and ``C[l, l] = c[0]`` for ``m = 0`` (already real, no phase). Verified
-    against a direct ``real_sh_basis`` synthesis to 1.7e-14 — see
-    ``test_quad_field.py::test_real_to_complex_matches_real_sh_basis``.
+    and ``C[l, l] = c[0]`` for ``m = 0``. Checked against ``real_sh_basis``
+    synthesis to 1.7e-14 (``test_real_to_complex_matches_real_sh_basis``).
     """
     C = _sw.empty_coeffs(L)
     idx = 0
@@ -95,41 +87,21 @@ DEFAULT_TAPER = 1e-3
 
 def band_taper(rho_hat: np.ndarray, L: int, t: float = DEFAULT_TAPER):
     """Smooth ``rho_hat`` by a heat kernel, ``c_lm *= exp(-t l(l+1))``.
+    Returns a new coefficient vector (same real-SH layout).
 
-    **Why a band-limited code still needs this.** ``rho_hat`` is band-limited
-    by construction, so it is tempting to assume the decode can resolve it.
-    It cannot, on scanned input, because what matters is the *spectrum* inside
-    the band, not the band. Measured at L=24, share of the coefficient norm in
-    the top quartile of degrees:
+    Why a band-limited code needs it: on scanned input the spectrum *inside*
+    the band is top-heavy (L=24: 0.665 of the coefficient norm in the top
+    quartile of degrees on a FaceScape head, vs 0.071 on the ``l^-2``
+    fixture), so the decoded surface has features at the resolution limit and
+    :func:`area_distortion`'s icosphere sampling does not converge.
 
-        FaceScape head   0.665        l^-2 fixture   0.071
+    :data:`DEFAULT_TAPER` = 1e-3 is a compromise: stronger tapers converge the
+    referee further but push ``rho_rms`` below ~1, out of the regime the
+    exact potential matters in (at 1e-3 a head keeps rms ~1.45-1.5). The
+    referee-drift evidence behind 1e-3 predates the spectral decoder.
 
-    A face's per-degree power is flat-to-rising (1.37 at l=2, 1.73 at l=24);
-    the fixture's falls as ``l^-2`` (5.83 -> 0.18). The projection of a field
-    with large content *above* ``L`` piles that energy into the top modes, so
-    the decoded surface carries features exactly at the resolution limit and
-    :func:`codec.decode` stops being mesh-convergent. That is what made
-    :func:`area_distortion` unusable on faces -- its verdict changed sign
-    between referee subdivisions.
-
-    The taper restores it, monotonically (head 254, L=24, referee drift
-    between subdivision 5 and 6)::
-
-        t = 0     5e-4    1e-3    2e-3    4e-3
-        31.0%   20.4%   13.7%    6.4%    0.0%      drift
-        1.87    1.63    1.45    1.18    0.90       rms(rho)
-
-    **Both columns matter, and they pull against each other.** Smoothing far
-    enough to converge the referee (``t = 4e-3``) also takes the amplitude
-    below ``rms`` 1.0, i.e. it smooths away the very regime
-    that makes the exact potential worth solving for. :data:`DEFAULT_TAPER`
-    is ``1e-3``: drift 13.7%, comfortably under the effect sizes being
-    resolved (the potential difference is 15-29% on these heads), while
-    leaving ``rms`` at 1.45-1.51.
-
-    This is a *measurement* aid, not a pipeline stage -- it changes the shape
-    being meshed. Use it to make a scanned code scoreable; do not silently
-    apply it to something you are going to ship.
+    Trap: this is a *measurement* aid, not a pipeline stage -- it changes the
+    shape. Do not silently apply it to something you ship.
     """
     c = np.array(rho_hat, dtype=float, copy=True)
     i = 0
@@ -142,24 +114,19 @@ def band_taper(rho_hat: np.ndarray, L: int, t: float = DEFAULT_TAPER):
 
 def curvature_potential(rho_hat: np.ndarray, L: int, spinor=None) -> np.ndarray:
     """``ρ̂ -> φ``, the conformal potential the connection is a gradient of:
-    ``-log|λ|²`` of the immersion's actual spinor (PLAN.md §P9), via
-    :func:`shapegen.geom.dirac_spectral.log_conformal_coeffs`.
+    ``-log|λ|²`` of the immersion's spinor, via
+    :func:`shapegen.geom.dirac_spectral.log_conformal_coeffs` (complex swsh
+    coefficients, spin 0).
 
     Pass ``spinor`` (a :class:`~shapegen.geom.dirac_spectral.DiracSpectral`
-    solved at ``spinor_band(L, potential_band_extra(L))``) to reuse one
-    instead of solving again -- at L=32 the solve is the expensive step, and
-    §P7 route 2 (:func:`shapegen.quad.lift.lift_route2`) needs the same one.
-    See :func:`solve_potential_spinor`.
+    from :func:`solve_potential_spinor`) to reuse one solve -- it is the
+    expensive step at L=32, and :func:`shapegen.quad.lift.lift_spectral`
+    needs the same one. Trap: a spinor solved at a different band (e.g. plain
+    ``spinor_band(L)``) is accepted silently but gets ``φ``'s top degree 6-9x
+    wrong (see :func:`~shapegen.geom.dirac_spectral.log_conformal_coeffs`).
 
-    The sign is this module's convention for ``A = i·ðφ``. It converges to the
-    decoded surface's own conformal factor at ``O(h²)`` (0.0436, 0.0109,
-    0.0027, 0.00068 at subdivision 3/4/5/6).
-
-    **The bundle's linearisation ``μ = 1 + 2ρ`` was removed 2026-09-26**,
-    along with the ``method="auto"`` switch between the two. Real FaceScape
-    codes sit at ``rho_rms`` 1.87-1.93, where the linearisation is not an
-    approximation of anything; the evidence that retired it is recorded in
-    PLAN.md §P9 ("Linear potential removed").
+    The sign is this module's convention for ``A = i·ðφ``. It replaced the
+    linear potential ``μ = 1 + 2ρ``.
     """
     if spinor is None:
         spinor = solve_potential_spinor(rho_hat, L)
@@ -168,10 +135,10 @@ def curvature_potential(rho_hat: np.ndarray, L: int, spinor=None) -> np.ndarray:
 
 
 def solve_potential_spinor(rho_hat: np.ndarray, L: int):
-    """The §P9 spinor :func:`curvature_potential` needs, at the padded band
-    ``spinor_band(L, potential_band_extra(L))`` -- solve it once with this and
-    hand it to both :func:`curvature_potential` and
-    :func:`shapegen.quad.lift.lift_route2`."""
+    """The spinor :func:`curvature_potential` needs, at the padded band
+    ``spinor_band(L, potential_band_extra(L))``. Solve once and pass it to
+    both :func:`curvature_potential` and
+    :func:`shapegen.quad.lift.lift_spectral`."""
     from ..geom.dirac_spectral import (potential_band_extra, solve_spinor,
                                        spinor_band)
     return solve_spinor(rho_hat, L, Ls=spinor_band(L, potential_band_extra(L)))
@@ -186,14 +153,9 @@ def connection_field(phi: np.ndarray) -> np.ndarray:
 def apply_C(psi_c: np.ndarray, S: int, L: int, A: np.ndarray) -> np.ndarray:
     """``C ψ`` for coefficients ``psi_c`` at spin ``S`` (see module docstring).
 
-    ``A`` is spin-1, synthesised at the same bandlimit ``L`` as everything
-    else here (one shared grid per ``L``, unlike the bundle's per-spin
-    ``Grid`` dict -- ``swsh``'s grid depends only on ``L``, not spin).
-
-    This is the direct, one-column-at-a-time reference form -- kept for
-    :func:`assemble_C` to be cross-checked against (see
-    ``test_quad_field.py::test_assemble_C_matches_apply_C_reference``), not
-    used by ``assemble_C`` itself any more (see its docstring for why).
+    ``A`` is spin-1 coefficients at the same bandlimit ``L`` (``swsh``'s grid
+    depends only on ``L``). Reference form only: :func:`assemble_C` is
+    cross-checked against it and does not call it.
     """
     eig = _sw.laplacian_eig(L, S)          # -[l(l+1) - S^2]
     neg_lap0 = -eig[:, None] * psi_c       # -Lap_0 psi = [l(l+1)-S^2] psi
@@ -209,43 +171,28 @@ def apply_C(psi_c: np.ndarray, S: int, L: int, A: np.ndarray) -> np.ndarray:
 
 
 def assemble_C(A: np.ndarray, S: int, L: int):
-    """Dense assembly of ``C`` at spin ``S``, as three matrix products
-    instead of one ``apply_C`` call per column.
+    """Dense assembly of ``C`` at spin ``S`` as three matrix products (far
+    less memory traffic than one :func:`apply_C` per column).
 
-    ``apply_C`` calls ``synth``/``analy`` four times, and each of those reads
-    the *entire* basis matrix for its ``(s, L)`` (``nmodes x Npix``, tens of
-    MB at ``L=32``) from memory. Column-by-column assembly therefore streams
-    that whole matrix once per column -- ``O(n)`` reads of an ``O(n)``-sized
-    matrix -- which is exactly the redundant memory traffic a matrix
-    *product* avoids by blocking. Concretely, writing ``c`` for the
-    coefficient vector (``modes = mode_list(S, L)`` order) and ``Y_s`` for
-    ``basis_matrix(s, L)``'s stacked basis (so ``synth(c, s) = Y_s.T @ c``
-    and ``analy(f, s) = Y_s.conj() @ (weights * f)``), ``apply_C``'s three
-    terms are each linear or bilinear in ``c`` and reduce to:
+    With ``Y_s`` = ``basis_matrix(s, L)`` (so ``synth(c, s) = Y_s.T @ c`` and
+    ``analy(f, s) = Y_s.conj() @ (weights * f)``):
 
         M_B    = Y_S.conj() @ diag(w·|A|²) @ Y_S.T                (n_S x n_S)
         M_up   = Y_S.conj() @ diag(w·Ā) @ Y_{S+1}.T @ diag(ð-factors)
         M_down = Y_S.conj() @ diag(w·A) @ Y_{S-1,last n_S rows}.T @ diag(ð̄-factors)
         C      = diag(l(l+1)-S²) + S²·M_B + iS·(M_up + M_down)
 
-    ``M_up``'s columns beyond ``mode_list(S+1, L)`` (the ``l=S`` block, which
-    ``ð`` annihilates) are zero; ``M_down`` needs only ``Y_{S-1}``'s *last*
-    ``n_S`` rows because ``mode_list(S-1, L) = [l=S-1 block] + mode_list(S, L)``
-    exactly (``swsh.mode_list``'s ordering makes this a slice, not a search).
+    ``M_up`` is zero on the ``l=S`` block (``ð`` annihilates it); ``M_down``
+    uses ``Y_{S-1}``'s last ``n_S`` rows, since ``mode_list(S-1, L)`` is
+    ``[l=S-1 block] + mode_list(S, L)``. Matches the ``apply_C``-per-column
+    assembly to 1.2e-16 at L=8.
 
-    Cross-checked against the direct ``apply_C``-per-column assembly at
-    ``L=8`` to 1.2e-16 relative -- see
-    ``test_quad_field.py::test_assemble_C_matches_apply_C_reference``.
+    ``C`` is self-adjoint analytically, but quadrature aliasing of the
+    ``|A|²`` and ``A·∇`` products leaves ~1% asymmetry; the result is
+    symmetrised so ``eigh`` is safe.
 
-    ``C`` is analytically self-adjoint (``div A = 0``), but the discrete
-    ``synth``/``analy`` round trip through the nonlinear ``|A|²`` and
-    ``A·∇`` terms aliases slightly above ``L``, leaving a relative asymmetry
-    of a percent or so; symmetrised here (as the bundle's own scripts always
-    do right after assembly) so every caller gets a matrix ``eigh`` can use
-    safely.
-
-    Returns ``(Cmat, modes)`` where ``modes = swsh.mode_list(S, L)`` gives the
-    ``(l, m)`` each row/column corresponds to.
+    Returns ``(Cmat, modes)``, ``modes = swsh.mode_list(S, L)`` giving each
+    row/column's ``(l, m)``.
     """
     from ..spectral.grids import gl_grid, solid_angle_weights  # noqa: PLC0415
 
@@ -285,12 +232,9 @@ def linear_start(Cmat: np.ndarray, modes, S: int, L: int) -> np.ndarray:
     """Smallest eigenvector of ``C`` (assumed already Hermitian, as
     :func:`assemble_C` returns it) -- the linear-theory starting field.
 
-    Rescaled by ``1/√(peak modulus)``, exactly as the bundle's own
-    ``gl()``/linear-stage code does after every stage. This is *not* a unit-
-    peak normalisation (it moves the peak from ``m`` to ``√m``, not to 1) --
-    it is the same soft rescaling :func:`ginzburg_landau` applies after every
-    annealing level, kept here only so the two stages start from a
-    comparable scale.
+    Returns the ``modes``-ordered coefficient vector, rescaled by
+    ``1/√(peak modulus)`` -- the same soft rescaling :func:`ginzburg_landau`
+    applies per level (peak ``m -> √m``, not unit peak).
     """
     _w, V = np.linalg.eigh(Cmat)
     psi = V[:, 0].astype(complex)
@@ -333,10 +277,10 @@ EPS_SAFETY = 0.85
 Measured: the collapse boundary is sharp, and 0.85 of it still anneals."""
 
 DEFAULT_LEVELS = (2.0, 1.74, 1.52, 1.32, 1.15, 1.0)
-"""Geometric ``2.0 -> 1.0`` in units of ``π/L``, six levels — the measured
-default (see :func:`ginzburg_landau`; it replaces ``(6.0, 3.0, 2.0)``, which
-sat above :func:`epsilon_ceiling` at every ``L <= 16`` tested and therefore
-returned the *linear start* rather than an annealed field)."""
+"""Geometric ``2.0 -> 1.0`` in units of ``π/L``, six levels. Across 13
+(L, amplitude) cases at L = 12/16/24: geometric-mean :func:`area_distortion`
+0.0735, worst 0.081, no failures; other in-window schedules land within 6%,
+so what matters is staying under :func:`epsilon_ceiling`."""
 
 
 def epsilon_ceiling(Cmat: np.ndarray) -> float:
@@ -349,30 +293,20 @@ def epsilon_ceiling(Cmat: np.ndarray) -> float:
 
         (1 + τ/ε²) / (1 + τλ) = (1 + c) / (1 + c·ε²λ),
 
-    which exceeds 1 exactly when ``ε²λ < 1`` — *independently of* ``c``, so
-    this is a property of the flow, not of the step size. A mode can only
-    grow out of zero if ``ε < 1/√λ``; if even the smallest eigenvalue fails
-    that, **every** mode decays and ``ψ -> 0``.
+    which exceeds 1 exactly when ``ε²λ < 1``, independently of ``c``. If even
+    ``λ_min`` fails that, every mode decays.
 
-    What that does in practice is worse than "the penalty does nothing"
-    (PLAN.md §P8.4's wording). ``ψ`` decays geometrically, the per-level
-    rescale ``ψ/√(peak|ψ|)`` cannot keep up, and what survives is the
-    slowest-decaying eigendirection — i.e. :func:`linear_start`. Measured on
-    the F1 fixture with the old ``(6.0, 3.0, 2.0)`` schedule, the returned
-    field overlaps ``linear_start`` at ``|⟨ψ_GL, ψ_lin⟩| = 0.99999`` (L=12)
-    and ``0.99964`` (L=16), and :func:`area_distortion` scores it at the
-    linear start's own number to five digits. Pushing ``iters`` higher does
-    not rescue it, it *underflows*: at ``iters=2560`` the field is exactly 0
-    and :func:`cones_from_field` fails on ``NaN``.
+    Trap (silent): the per-level rescale keeps the field alive, so above the
+    ceiling the flow does not fail -- it returns the slowest-decaying
+    eigendirection, i.e. :func:`linear_start` (overlap 0.9999+), and scores
+    like it. Raising ``iters`` only underflows it to exactly 0.
 
-    ``λ_min`` is nearly bandlimit-independent (the spin-4 Laplacian's
-    ``l(l+1) - S²`` floor at ``l = S`` is 4, pulled down by the curvature
-    term), so the *ceiling is essentially an absolute ``ε``* — measured 0.575
-    at both L=12 and L=16 on F1 amp 1, 0.5 exactly on the round sphere, 0.653
-    at amp 4 — while the schedule is written in units of ``π/L``. The two
-    therefore cross: in ``π/L`` units the ceiling is ``1.91`` at L=12, ``2.55``
-    at L=16, ``3.82`` at L=24 (round sphere). That is why the old schedule
-    failed hardest at *small* L, and why :func:`anneal_schedule` clamps.
+    ``λ_min`` is nearly bandlimit-independent (spin-4 floor ``l(l+1)-S² = 4``
+    at ``l = S``, lowered by curvature), so the ceiling is an absolute ``ε``
+    (0.5 on the round sphere, 0.575 on F1 amp 1, 0.653 at amp 4). In ``π/L``
+    units it therefore grows with L (1.91 / 2.55 / 3.82 / 5.09 at L = 12 /
+    16 / 24 / 32, round sphere): a fixed ``π/L`` schedule is most at risk at
+    *small* L. Returns ``inf`` if ``λ_min <= 0``.
     """
     try:
         from scipy.linalg import eigvalsh  # noqa: PLC0415
@@ -389,13 +323,10 @@ def anneal_schedule(Cmat: np.ndarray, L: int, levels=DEFAULT_LEVELS,
     """``levels`` (in units of ``π/L``) clamped to ``safety ×``
     :func:`epsilon_ceiling`.
 
-    The schedule is written in ``π/L`` — the resolution scaling that fixes
-    where the *optimum* sits (measured 1-1.5 at both L=12 and L=16, PLAN.md
-    §P8.4's own number) — while the ceiling is an absolute ``ε``. At small
-    ``L`` the top of a fixed ``π/L`` schedule can poke through it:
-    ``DEFAULT_LEVELS``' 2.0 is ``0.524`` at L=12, against a round-sphere
-    ceiling of ``0.5``. Clamping keeps one schedule usable across bandlimits
-    instead of making the caller re-derive it per ``L``.
+    The optimum scales with ``π/L`` (1-1.5 at L=12 and 16) but the ceiling is
+    an absolute ``ε``, so at small L the top of a fixed schedule can cross it
+    (``DEFAULT_LEVELS``' 2.0 is 0.524 at L=12 vs a round-sphere ceiling of
+    0.5). Clamping keeps one schedule valid at every L.
     """
     cap = safety * epsilon_ceiling(Cmat) * L / np.pi
     return tuple(min(float(ef), cap) for ef in levels)
@@ -407,47 +338,23 @@ def ginzburg_landau(psi0: np.ndarray, Cmat: np.ndarray, modes, S: int, L: int,
     """Semi-implicit Ginzburg-Landau flow at spin ``S``, one factorisation per
     ``ε`` level in ``levels``.
 
-    ``ε`` scales to the **field's own resolution** ``π/L`` (``tune.py``'s
-    fix), not to the finer grid :func:`cones_from_field` reads zeros off —
-    PLAN.md's "the pitfall that cost the most": scaling to the output grid
-    left the cones essentially unmoved (worse than a plain cube on the
-    area-distortion energy; measured here at 0.115 against the cube's 0.078
-    at L=12, a 1.47x loss, and 1.53x at L=16).
+    ``psi0`` is a ``modes``-ordered coefficient vector (e.g.
+    :func:`linear_start`); returns the annealed vector, same layout.
 
-    ``levels`` defaults to :func:`anneal_schedule` — ``DEFAULT_LEVELS``
-    clamped to :func:`epsilon_ceiling` — and is bounded on **both** sides:
+    ``levels`` are in units of the **field's own resolution** ``π/L``, not of
+    the finer grid :func:`cones_from_field` reads zeros from -- scaling to the
+    output grid leaves the cones essentially unmoved (1.5x worse than a plain
+    cube). They default to :func:`anneal_schedule` and are bounded on both
+    sides:
 
-    * **above** by :func:`epsilon_ceiling`, where the field collapses to the
-      linear start (``check=True`` refuses such a schedule; see that
-      function);
-    * **below** by the grid: once the vortex core is narrower than the field's
-      own resolution the solution degrades. Measured at one level, L=12 F1:
-      ``ε/(π/L) = 1.2 -> 0.075``, ``0.8 -> 0.081``, ``0.5 -> 0.084``,
-      ``0.4 -> 0.112``, ``0.3 -> 0.124``, ``0.2 -> 0.175``; L=16 the same,
-      turning up below 0.5. PLAN.md §P8.4's "do not drive ε to 0", measured.
+    * above by :func:`epsilon_ceiling`, where the result silently collapses
+      to the linear start; ``check=True`` (default) raises instead, and
+      ``check=False`` exists only to reproduce the collapse in tests;
+    * below by the grid: under ~0.5 the vortex core is narrower than the
+      field's resolution and quality degrades (one level at L=12 F1: 0.075
+      at 1.2, 0.084 at 0.5, 0.175 at 0.2). Do not drive ``ε`` to 0.
 
-    **Why the default changed from ``(6.0, 3.0, 2.0)``.** That schedule is
-    entirely above the ceiling at every bandlimit this was tested at, so it
-    did not anneal — it returned :func:`linear_start` (overlap 0.99999) and
-    failed §P8.4's own "GL beats the linear eigenproblem by >2x" gate at
-    1.02x. Across 13 (L, amplitude) cases at L = 12/16/24 the old schedule
-    scored a geometric-mean :func:`area_distortion` energy of **0.189** with
-    two outright failures (0 cones on the round sphere) and a worst case of
-    0.647; ``DEFAULT_LEVELS`` scores **0.0735** with no failures and a worst
-    case of 0.081 — a 2.6x improvement with 8x less spread. Four other
-    in-window schedules land within 6% of that, so the choice among them is
-    inside the noise; what matters is staying under the ceiling.
-
-    **It was a small-L failure, which is why it survived.** The ceiling in
-    ``pi/L`` units grows with ``L`` (1.91 at L=12, 2.55 at L=16, 3.82 at
-    L=24, 5.09 at L=32, round sphere), so ``(6.0, 3.0, 2.0)`` is entirely
-    above it at L=12-16 -- where every test in this repo runs -- and mostly
-    *below* it at L=32, where ``scripts/quad_demo.py`` runs. Measured at
-    L=32: old 0.0881 / 0.0783 against this default's 0.0756 / 0.0855 at
-    amplitude 0 / 1, i.e. a wash. The demo was never broken; the tests were.
-
-    ``check=False`` runs an above-ceiling schedule anyway, which is only
-    useful for reproducing the collapse (the tests do).
+    Raises ``FloatingPointError`` if the field collapses to zero anyway.
     """
     if levels is None:
         levels = anneal_schedule(Cmat, L)
@@ -504,12 +411,8 @@ def _fine_grid(L: int, over: float = 7.0):
 @functools.lru_cache(maxsize=8)
 def _fine_grid_basis(S: int, L: int, over: float):
     """``(th, ph, Y)`` for the fine grid, ``Y`` the ``eval_basis`` design
-    matrix -- cached because a typical caller (:func:`cones_from_field`)
-    evaluates the same ``(S, L, over)`` grid twice per sample (linear start,
-    then the GL result), and ``eval_basis`` recomputes ``wigner_d`` from
-    scratch (it takes arbitrary scattered points, so it cannot reuse
-    ``swsh``'s own ``gl_grid``-keyed basis cache) -- one of the two calls
-    was pure repeated work.
+    matrix. Cached: callers evaluate the same grid repeatedly (linear start,
+    then GL result) and ``eval_basis`` cannot use ``swsh``'s own cache.
     """
     th, ph = _fine_grid(L, over)
     TH, PH = np.meshgrid(th, ph, indexing="ij")
@@ -529,25 +432,15 @@ def cones_from_field(vec: np.ndarray, S: int, L: int, over: float = 7.0):
     gives an integer winding ``k``; a nonzero ``k`` is a cone of index
     ``+k/S`` at that cell's center.
 
-    Returns a list of ``(position (3,), index)``.
+    ``vec`` is a ``mode_list(S, L)``-ordered coefficient vector; ``over`` sets
+    the fine grid's oversampling. Returns a list of ``(unit position (3,),
+    index)``.
 
-    **The sign, which used to be negated here.** Poincare-Hopf on a genus-0
-    surface puts the total index at ``+chi = +2`` for a field of any spin --
-    a cross field on a sphere is 8 cones of ``+1/4``, the cube -- and
-    :func:`winding_total` measures the raw plaquette sum on these fields as
-    ``+8 = +S.chi``, so ``k/S`` already has the right sign and the extra
-    negation made every index come back at ``-1/4``, summing to ``-2``.
-
-    That was not cosmetic downstream. The flat structure the whole quad
-    pipeline develops is ``omega = prod_k (z - C_k)^(-idx_k) dz``, which is
-    regular at the chart's far pole exactly when ``sum_k idx_k = +2``; at
-    ``-2`` it acquires a pole of order 4 there instead, and no square grid
-    closes up over it. Measured directly on the ``ell^-2`` fixture with
-    :func:`shapegen.quad.grid.quad_grid`: the corrected sign gives Euler
-    characteristic 2 and coverage 1.000000, the negated one gives -3240.
-    The P0 reference corpus agrees -- its ``cone_idx.npy`` is ``+0.25``
-    eight times over -- which is why nothing caught this until the mesh-free
-    cones and the extraction were run end to end.
+    Sign convention: indices sum to ``+χ = +2`` (a round-sphere cross field
+    gives 8 cones of ``+1/4``). Trap: a sign flip is not cosmetic -- the flat
+    form ``prod (z - C_k)^(-idx_k) dz`` is regular at the chart's far pole
+    only when the sum is ``+2``, and at ``-2`` :func:`shapegen.quad.grid.quad_grid`
+    produces garbage (Euler characteristic -3240 instead of 2).
     """
     th, ph, Y = _fine_grid_basis(S, L, over)
     v = (Y @ vec).reshape(len(th), len(ph))
@@ -571,10 +464,9 @@ def cones_from_field(vec: np.ndarray, S: int, L: int, over: float = 7.0):
 
 def winding_total(field_grid: np.ndarray) -> float:
     """Total winding of a synthesised field over its whole (periodic-in-φ)
-    grid, in units of ``2π`` -- a cheap diagnostic that the field is a
-    genuine section. Poincaré-Hopf fixes it at ``S·χ = +2S`` for a spin-``S``
-    field on a genus-0 surface, and it measures ``+8.000000`` at ``S=4`` on
-    both the round sphere and F1; it is ``+S`` times
+    grid (shape ``(ntheta, nphi)``), in units of ``2π`` -- a cheap check that
+    the field is a genuine section. Poincaré-Hopf fixes it at ``+2S`` on a
+    genus-0 surface (``+8`` at ``S=4``), i.e. ``S`` times
     :func:`cones_from_field`'s index sum."""
     v = field_grid
     tot = 0.0
@@ -595,14 +487,16 @@ def winding_total(field_grid: np.ndarray) -> float:
 def area_distortion_energy(cones, rho_hat: np.ndarray, L: int, LS: int = 12,
                             power: int = 2, n_samples: int = 30000,
                             seed: int = 0) -> float:
-    """``tune.py``'s ``energy``: how well a discrete set of quarter cones
-    reproduces the curvature-induced target moments ``K_lm``, in an
-    ``H⁻power`` norm (``power=2`` matches PLAN.md's gate).
+    """``tune.py``'s ``energy``: how well a set of point cones reproduces the
+    curvature moments ``K_lm``, in an ``H⁻power`` norm (``power=2`` matches
+    the cross-field quality gate). Lower is better.
 
-    ``K_lm`` are the degree ``1..LS`` moments of ``μ - 1 = 2ρ`` on a Monte
-    Carlo sample of the sphere; a set of point charges ``k_i`` at ``P_i``
-    contributes ``2π Σ_i k_i · conj(Y_lm(P_i))`` (the ``2π`` matches the
-    charges' own normalisation in the bundle). Lower is better.
+    ``K_lm`` are the degree ``1..LS`` moments of ``2ρ`` on a Monte Carlo
+    sample; cones ``(P_i, k_i)`` contribute ``2π Σ_i k_i · conj(Y_lm(P_i))``.
+
+    Trap: it scores against the linearisation ``μ = 1 + 2ρ``, which the
+    potential no longer uses, so it cannot referee potential changes; use
+    :func:`area_distortion` for that.
     """
     from scipy.special import sph_harm_y
 
@@ -645,27 +539,27 @@ def area_distortion_energy(cones, rho_hat: np.ndarray, L: int, LS: int = 12,
 def _decoded_surface_cached(rho_bytes: bytes, n: int, subdiv: int):
     from ..geom.mesh import icosphere
     from ..geom.operators import vertex_areas
-    from .. import codec
+    from .lift import lift_spectral
 
     rho_hat = np.frombuffer(rho_bytes, dtype=float, count=n)
     m = icosphere(subdiv)
     S = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
-    X = codec.decode(rho_hat, S, m.faces)
+    X, _ = lift_spectral(S, rho_hat, int(round(np.sqrt(n))) - 1)
     return {"S": S, "faces": m.faces,
             "dA_sphere": vertex_areas(S, m.faces),
             "dA_surface": vertex_areas(X, m.faces)}
 
 
 def decoded_surface(rho_hat: np.ndarray, subdiv: int = 5) -> dict:
-    """The **cone-independent** half of :func:`area_distortion`: decode ``ρ̂``
-    onto ``icosphere(subdiv)`` and take both area elements.
+    """The cone-independent half of :func:`area_distortion`: the band-limited
+    surface (:func:`shapegen.quad.lift.lift_spectral`) sampled at
+    ``icosphere(subdiv)``'s vertices, with per-vertex area elements of the
+    sphere and of the surface on that triangulation.
 
-    :func:`area_distortion` used to redo this on every call, and it is 97% of
-    that call's cost (2.63 s of 2.72 s at ``L=12, subdiv=5``) — while
-    depending on nothing but ``ρ̂``. Any sweep or optimisation over *cone
-    positions* at fixed ``ρ̂`` should build this once and pass it as
-    ``surface=``; an LRU of the last four ``(ρ̂, subdiv)`` makes plain repeated
-    calls fast too.
+    It dominates :func:`area_distortion`'s cost and depends only on ``ρ̂``
+    (``L`` is inferred from its length), so sweeps over cone positions should
+    build it once and pass ``surface=``. The last four ``(ρ̂, subdiv)`` are
+    LRU-cached.
 
     Returns ``{"S", "faces", "dA_sphere", "dA_surface"}``.
     """
@@ -679,100 +573,36 @@ def area_distortion(cones, rho_hat: np.ndarray, L: int, subdiv: int = 5,
                     pole: np.ndarray | None = None) -> dict:
     """How much a cone set stretches area, measured on the surface itself.
 
-    **Why this exists next to :func:`area_distortion_energy`.** That one scores
-    a placement against ``K_lm``, the spherical-harmonic moments of
-    ``mu - 1 = 2 rho`` -- which *is* the linearisation
-    :func:`curvature_potential`'s Dirac solve replaced (the linearisation
-    itself was removed 2026-09-26). A referee that
-    shares the assumption under test cannot settle the question, and measured
-    it did not: the exact potential scored 1.17x, 0.48x, 1.37x, 1.10x and
-    3.09x the linearisation's number across five amplitudes, with no trend.
+    A quad mesh lays down cells that are exactly ``s x s`` in the developed
+    plane; this measures how unequal they become on the surface. It never
+    forms a curvature potential, so it can referee changes to one (unlike
+    :func:`area_distortion_energy`). 0 is unreachable, since a conformal map
+    cannot preserve area.
 
-    This one never forms ``mu``. It asks the question cones exist to answer:
-    a quad mesh lays down cells that are *exactly* ``s x s`` in the developed
-    plane, so how unequal are they once they are on the surface? Lower is
-    better, and 0 would mean the flat structure the cones define is
-    isometric to the surface -- unreachable, since a conformal map cannot
-    preserve area (PLAN.md §10), which is exactly why where the cones go is a
-    real choice.
-
-    Three quantities, none of which come from a curvature potential:
-
-    * the **surface** area element, from :func:`shapegen.codec.decode` -- the
-      *mesh* Dirac solve, independent of both candidates;
-    * the **flat** area element, ``|W|^2`` from the cones alone
+    * surface area element: :func:`decoded_surface` (``lift_spectral``);
+    * flat area element: ``|W|^2`` from the cones alone
       (:func:`shapegen.quad.grid.form_log_abs`);
-    * their ratio ``sigma``, integrated against the flat measure -- which is
-      the right measure here precisely because every cell has the same flat
-      area, so this is what a per-face average over the traced mesh converges
-      to.
+    * ``sigma`` = their ratio, integrated against the flat measure (every
+      cell has equal flat area, so this is what a per-face average over the
+      traced mesh converges to).
 
-    Returns ``{"energy", "interdecile", "sigma", "weights"}`` with ``energy``
-    the flat-measure variance of ``log sigma`` (scale-free, so the immersion's
-    undetermined global scale drops out) and ``interdecile`` the p90/p10
-    ratio of ``sigma`` for a reading in plain units.
+    Returns ``{"energy", "interdecile", "sigma", "weights"}``: ``energy`` is
+    the flat-measure variance of ``log sigma`` (scale-free), ``interdecile``
+    the p90/p10 ratio of ``sigma``. Raises ``ValueError`` unless the index
+    sum is 2.
 
-    **Resolution warning: ``subdiv=5`` does not referee a real scanned face.**
-    The surface half of this metric is ``codec.decode`` on ``icosphere(subdiv)``,
-    and that decode is only as converged as the mesh. Measured, the energy of
-    one fixed cone set against ``subdiv`` 4 / 5 / 6:
+    Trap -- resolution on scanned faces. The surface is exact, but both area
+    elements are triangle areas on ``icosphere(subdiv)``. With the former
+    mesh decoder, ``subdiv=5`` was converged on ``ℓ⁻²`` fixtures (<3% at
+    L=16, ~7% at L=32 vs subdiv 6) but not on FaceScape faces (20-35%, and
+    cone-set comparisons changed sign). How much of that was the decoder and
+    how much the sampling has not been re-measured; check convergence in
+    ``subdiv`` (or :func:`band_taper`) before quoting a face number.
 
-    ====================  =======  =======  =======  =========  =========
-    field                 sub 4    sub 5    sub 6    |5-6|/6    |4-6|/6
-    ====================  =======  =======  =======  =========  =========
-    ``ℓ⁻²`` L=16 amp 1    0.07237  0.07130  0.07196  **0.9%**   0.6%
-    ``ℓ⁻²`` L=16 amp 8    0.21563  0.22854  0.23543  **2.9%**   8.4%
-    ``ℓ⁻²`` L=32 amp 1    0.08395  0.08549  0.07991  **7.0%**   5.1%
-    ``ℓ⁻²`` L=32 amp 8    0.23074  0.25638  0.25938  **1.2%**   11.0%
-    FaceScape L=24        0.05603  0.06656  0.08499  **21.7%**  34.1%
-    FaceScape L=24 (2nd)  0.05426  0.06870  0.08999  **23.7%**  39.7%
-    FaceScape L=32        0.15787  0.05688  0.08093  **29.7%**  95.1%
-    FaceScape L=32 (2nd)  0.16633  0.05468  0.08420  **35.1%**  97.5%
-    ====================  =======  =======  =======  =========  =========
-
-    On a smooth band-limited field the default is fine (<3% at L=16, ~7% at
-    L=32). On a real face it is **not**: the value moves by a fifth to a
-    third between ``icosphere(5)`` and ``icosphere(6)``, and it is not even
-    monotone in the mesh (0.158 -> 0.057 -> 0.081 at L=32).
-
-    **And the bias is not common mode, so ratios do not survive it either.**
-    The obvious hope is that two cone sets scored on the *same* surface
-    cancel the referee's error. Measured, on a smooth field they do and on a
-    face they do not. Ratio of the Dirac potential to the (since removed) linearisation
-    (geometric mean over four schedules, after refinement), the *same* cone
-    sets scored against ``subdiv=5`` and ``subdiv=6``:
-
-    ====================  ==========  ==========
-    field                 referee 5   referee 6
-    ====================  ==========  ==========
-    ``ℓ⁻²`` L=16 amp 8    0.432x      0.453x
-    ``ℓ⁻²`` L=32 amp 1    0.983x      0.984x
-    FaceScape L=24        0.983x      **0.831x**
-    FaceScape L=24 (2nd)  1.016x      **0.711x**
-    FaceScape L=32        2.247x      **0.946x**
-    FaceScape L=32 (2nd)  2.271x      **0.737x**
-    ====================  ==========  ==========
-
-    On the fixture the ratio is stable to 5%. On faces it **changes sign** at
-    L=24 and swings by 2.4x at L=32 -- "dirac loses 2.3x" at ``subdiv=5``
-    becomes "dirac wins 1.4x" at ``subdiv=6``, on identical cone sets. So at
-    the default this metric cannot referee a scanned face *at all*: not its
-    absolute value, and not the comparisons it is used for. Raise ``subdiv``
-    until the answer stops moving, or measure on the traced mesh, before
-    quoting any face number. Nothing here weakens it on the band-limited
-    fixtures the tests use, where it is converged and was validated against
-    both the traced mesh and the cube's known optimum.
-
-    ``surface`` takes a prebuilt :func:`decoded_surface` so a sweep over cone
-    placements at fixed ``ρ̂`` does not pay for a Dirac solve per evaluation.
-
-    ``pole`` **freezes the chart** (forwarded to
-    :func:`~shapegen.quad.cones.project_cones`), skipping the 4000-sample
-    random pole search — 40 ms against the 1.1 ms the rest of a hoisted
-    evaluation costs. The energy is chart-free and measured it really is:
-    against a searched pole, and against a second arbitrary fixed pole, the
-    number agrees to 2e-15 relative even where the search's own answer jumps
-    by 179 degrees. So this is for cost and determinism, not correctness.
+    ``surface`` takes a prebuilt :func:`decoded_surface`. ``pole`` freezes
+    the chart (forwarded to :func:`~shapegen.quad.cones.project_cones`),
+    skipping the 40 ms random pole search; the energy is chart-free (agrees
+    to 2e-15 across poles), so this buys cost and determinism only.
     """
     from . import cones as _qc
     from . import grid as _qg

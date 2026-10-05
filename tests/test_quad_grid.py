@@ -1,5 +1,5 @@
 """Acceptance tests for :mod:`shapegen.quad.grid` -- grid tracing over the
-whole sphere (PLAN.md §P6, replacing :mod:`shapegen.quad.extract`).
+whole sphere.
 
 Most of this file leans on one fixture with *exact* ground truth. Put eight
 ``+1/4`` cones at the corners of a cube and the developing map is the
@@ -32,7 +32,7 @@ The four properties the tests are organised around:
 "Equi-area" needs a word, because it is measured in two different places.
 In the *developed* plane every cell is exactly ``s x s`` by construction, so
 measuring that proves nothing. On the sphere a conformal map cannot preserve
-both shape and size (PLAN.md §10), so the areas genuinely do vary -- what is
+both shape and size, so the areas genuinely do vary -- what is
 testable is that each face's area equals ``s^2`` times the conformal factor
 there, which is :func:`~shapegen.quad.grid.developed_cell_area`, and that the
 variation vanishes where the symmetry forces it to (the ``m = 2`` cube, whose
@@ -263,8 +263,8 @@ def test_cube_face_areas_fall_into_the_predicted_orbits(m, n_orbits):
 def test_cube_m2_is_exactly_equi_area():
     """The one configuration where equal-area and conformal coincide: at
     ``m = 2`` all 24 faces lie in a single symmetry orbit, so they must have
-    *identical* solid angle. Conformal maps cannot preserve area in general
-    (PLAN.md §10), which is why this is the only case where the strict
+    *identical* solid angle. Conformal maps cannot preserve area in general,
+    which is why this is the only case where the strict
     statement is available -- and why the general one is
     ``developed_cell_area``, below."""
     _P, C, idx = cube_cones()
@@ -335,10 +335,9 @@ def test_independent_arrivals_agree(m):
 
 def test_merge_tolerance_does_not_change_the_mesh():
     """``merge_frac`` swept over five decades gives bit-identical counts.
-    Contrast :mod:`shapegen.quad.extract`, where the merge threshold had to
+    (The single-chart extractor this replaced needed its merge threshold to
     separate freshly traced intermediate points, so changing it changed the
-    output -- and where raising it past the shrinking local step was exactly
-    the failure that capped coverage."""
+    output.)"""
     _P, C, idx = cube_cones()
     ref = None
     for mf in (1e-5, 1e-3, 0.05, 0.25, 0.45):
@@ -498,7 +497,7 @@ def test_negative_cone_traces_and_gives_valence_five():
 
 def test_p0_configuration_closes_over_the_sphere():
     """The bundle's own solved 8-cone configuration, which
-    :mod:`shapegen.quad.extract` could only cover 91% of, with a valence
+    the single-chart extractor this replaced could only cover 91% of, with a valence
     histogram of 98 twos / 275 threes / 77 fives. Here it closes exactly."""
     C = load_ref("cones_solved")
     idx = load_ref("cone_idx")
@@ -536,7 +535,7 @@ def test_p0_cone_split_matches_the_half_lattice():
 
 
 def test_sublattice_solve_gives_a_pure_quad_mesh():
-    """PLAN.md's half-lattice is an artefact of asking only that the
+    """The half-lattice is an artefact of asking only that the
     *periods* be integral. Targeting ``(1+i)Z[i]`` instead puts every cone on
     a grid vertex, and the mesh comes out pure quad with exactly 8 valence-3
     vertices -- at a smaller cell (0.025 against 0.070 here), which is the
@@ -679,7 +678,7 @@ def test_end_to_end_is_gated_on_quality_and_not_only_on_topology():
                                                 for k in range(30)))
         assert sol["cones"] is not None
         g = qg.quad_grid(sol["cones"], chart["idx"], sol["cell"])
-        P3, _info = ql.lift_route1(g.points @ chart["Rm"], rho, subdiv=5)
+        P3, _info = ql.lift_spectral(g.points @ chart["Rm"], rho, L)
         areas = []
         for f in g.faces:
             p, n = P3[f], len(f)
@@ -707,22 +706,3 @@ def test_end_to_end_is_gated_on_quality_and_not_only_on_topology():
     assert bad > 2.5 * good
 
 
-def test_grid_beats_the_module_it_replaces_on_the_same_input():
-    """The comparison stated as a test, on the P0 configuration both can
-    consume. ``extract.py`` tops out at 0.911 coverage with a broken valence
-    histogram; the replacement closes the sphere with only cone
-    irregularities."""
-    from shapegen.quad import extract as qx
-
-    C = load_ref("cones_solved")
-    idx = load_ref("cone_idx")
-    s = float(load_ref("cell")[0])
-
-    old = qx.extract_quad_mesh(C, idx, s)
-    old_val = np.array([len(x) for x in old["adj"]])
-    assert old["coverage"] < 0.92
-    assert set(old_val) - {3, 4} != set()          # spurious irregularities
-
-    new = qg.quad_grid(C, idx, s)
-    assert new.coverage == pytest.approx(1.0, abs=1e-9)
-    assert set(new.valences) <= {3, 4}

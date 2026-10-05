@@ -1,15 +1,8 @@
-"""Pole choice and stereographic projection for cones (PLAN.md §P4, ported
-from ``s4_cones.py`` — reduced scope, see below).
+"""Cones on the sphere -> a flat chart for the period solve (ported from ``s4_cones.py``): choose a pole far from every cone, rotate it to
+north, and stereographically project.
 
-**Scope reduction from the plan.** ``s4_cones.py``'s job was: take umbilics
-(index +½ each, from mesh curvature) and split each into two valence-3 cones
-(index +¼) before projecting. This port skips umbilics and splitting
-entirely — cones come from :mod:`shapegen.quad.field`'s Ginzburg-Landau
-anneal instead, which already produces the correct ±¼-index singularities
-directly (``cones_from_field``'s winding count). What's left of P4 is just the
-part that turns *some* set of indexed points on the sphere into a flat chart
-for §P5's period solve: choose a pole far from every cone, rotate it to the
-north pole, and stereographically project.
+Cones come from :func:`shapegen.quad.field.cones_from_field` with their
+indices already final; no umbilic detection or splitting happens here.
 """
 
 from __future__ import annotations
@@ -22,15 +15,13 @@ __all__ = ["choose_pole", "rotation_to_north", "stereo", "unstereo",
 
 def choose_pole(positions: np.ndarray, n_samples: int = 4000, seed: int = 0):
     """Pick a projection pole maximally far from every point in ``positions``
-    (unit vectors, shape ``(n, 3)``) — ``s4_cones.py``'s search, ported
-    exactly.
+    (unit vectors, shape ``(n, 3)``) by random search: each of ``n_samples``
+    directions ``v`` is scored by the worse of ``v``'s and ``-v``'s angular
+    distance to its nearest point.
 
-    Samples ``n_samples`` random unit directions ``v``; scores each by the
-    *worse* of ``v``'s and ``-v``'s distance to its nearest point (cheap to
-    get both from one draw, and using the worse of the two searches more of
-    the sphere per sample without a real cost); keeps the best-scoring ``v``.
-
-    Returns ``(pole, distance_radians)``.
+    Returns ``(pole, distance_radians)``. Trap: the result can jump
+    discontinuously (179 degrees measured) as the points move slightly; see
+    :func:`project_cones`'s ``pole``.
     """
     rng = np.random.default_rng(seed)
     best = None
@@ -45,22 +36,13 @@ def choose_pole(positions: np.ndarray, n_samples: int = 4000, seed: int = 0):
 
 
 def rotation_to_north(pole: np.ndarray) -> np.ndarray:
-    """Rotation matrix ``Rm`` with ``Rm @ pole == [0, 0, 1]`` (to ``1e-14``).
-
-    ``s4_cones.py`` computes this Rodrigues expression three times: the first
-    two are dead stores, and the second is an outright wrong formula left in
-    place (it squares the *previous* ``Rm`` — ``I + K``, not the skew matrix
-    ``K`` itself — so ``Rm @ Rm`` there is not ``K @ K``). This ports only the
-    third (correct, and the one actually used downstream) expression::
+    """Rotation matrix ``Rm`` with ``Rm @ pole == [0, 0, 1]`` (to ``1e-14``)::
 
         v = a x b,  c = a.b,  K = skew(v)
         Rm = I + K + K@K / (1 + c)
 
-    for ``a = pole``, ``b = [0, 0, 1]`` — the standard closed form for the
-    rotation taking one unit vector to another, singular only at ``a = -b``
-    (not guarded here, matching the bundle: irrelevant in practice since
-    ``choose_pole`` never returns a pole antipodal to ``[0,0,1]`` by
-    construction).
+    for ``a = pole``, ``b = [0, 0, 1]``. Trap: singular at ``pole = [0, 0,
+    -1]`` and not guarded.
     """
     a = np.asarray(pole, dtype=float)
     b = np.array([0.0, 0.0, 1.0])
@@ -90,14 +72,10 @@ def unstereo(z: np.ndarray) -> np.ndarray:
 
 def chart_to_sphere(z: np.ndarray, Rm: np.ndarray) -> np.ndarray:
     """Inverse of the projection inside :func:`project_cones`: flat chart
-    positions -> unit-sphere positions. Undoes the rotation with ``Rm``'s
-    transpose (``Rm`` is orthogonal, so ``Rm.T == Rm^-1``) -- the same
-    relation :mod:`tests.test_quad_cones` cross-checks against the P0
-    corpus's saved ``Rm.npy``/``cones_plane.npy``.
-
-    Used after :func:`~shapegen.quad.periods.solve_lattice` perturbs the
-    chart, to carry the solved cones back onto the sphere for display or for
-    the next stage (§P6 extraction, once it exists).
+    positions (complex) -> unit-sphere positions ``(n, 3)``, undoing the
+    rotation with ``Rm.T``. Used to carry
+    :func:`~shapegen.quad.periods.solve_lattice`'s solved cones back onto the
+    sphere.
     """
     return unstereo(z) @ Rm
 
@@ -110,20 +88,14 @@ def project_cones(cones, n_samples: int = 4000, seed: int = 0,
     Returns a dict: ``pole``, ``pole_dist`` (radians, the pole search's own
     score), ``Rm``, ``z`` (complex chart positions, cone order preserved),
     ``idx`` (indices, unchanged — no splitting happens here), and
-    ``min_gap`` (minimum pairwise chart separation — §P5's cone-motion
+    ``min_gap`` (minimum pairwise chart separation — the period solve's cone-motion
     budget is ``0.25 x`` this).
 
-    ``pole`` **freezes the chart**: pass a unit vector and :func:`choose_pole`
-    is skipped entirely, so the projection is a deterministic, smooth function
-    of the cone positions and costs nothing. Without it the pole comes from a
-    4000-sample random search over the cones themselves (40 ms), and it
-    genuinely hops as they move — 179 degrees between two neighbouring
-    placements in one measured walk. Whether that matters depends on what is
-    computed from the chart: :func:`~shapegen.quad.field.area_distortion` is
-    chart-free and does not notice (agreement to 2e-15 across that same hop),
-    but anything that *does* depend on the chart, and anything sweeping over
-    cone positions at all, should freeze it. ``pole_dist`` is still reported,
-    so a caller that froze the pole can check it has not drifted into a cone.
+    ``pole`` freezes the chart: :func:`choose_pole` (40 ms, and it hops as
+    cones move) is skipped, making the projection a smooth deterministic
+    function of the cones. Anything chart-dependent, and any sweep over cone
+    positions, should freeze it. ``pole_dist`` is still reported so a caller
+    can check a frozen pole has not drifted into a cone.
     """
     P = np.array([p for p, _k in cones])
     idx = np.array([k for _p, k in cones])

@@ -1,4 +1,4 @@
-"""Gates P0 and P1 of PLAN.md — the regression corpus and the ρ fixtures.
+"""Gates P0 and P1 — the regression corpus and the ρ fixtures.
 
 P0 unblocks P5-P7: with ``cones_solved.npy``/``cell.npy`` in hand, later steps
 can be written and tested out of order, exactly as the bundle's own
@@ -30,8 +30,6 @@ def test_gate_p0_corpus_loads():
         "V", "F", "rho", "Vs", "u", "N", "k1", "k2", "d1",
         "umb_p", "umb_i",
         "Rm", "pole", "cones_plane",
-        "q2_pos", "q2_P3", "q2_F", "q2_adj",
-        "quad_keys", "quad_z", "quad_P3", "quad_F",
         "psiG", "psi0", "uM", "uL", "rho2",
     ]
     for name in names:
@@ -83,7 +81,7 @@ def test_gate_p0_mesh_matches_repo_icosphere():
 
 def test_gate_p1_matches_bundle_rho():
     """``real_sh_basis(V, 32) @ ρ̂`` reproduces the bundle's ``rho.npy`` to
-    1e-12 (PLAN.md Gate P1), for the same seed and spectrum, after matching
+    1e-12 (gate P1), for the same seed and spectrum, after matching
     the m-sign and sqrt(2) conventions in ``bundle_style_coeffs``."""
     _, _, rho, _ = fixture_f1(L=32, seed=1)
     rho_ref = load_ref("rho")
@@ -97,7 +95,7 @@ def test_gate_p1_f0_is_the_identity():
 
 
 def test_gate_p1_f4_spectra_are_distinct():
-    """F4's four spectra (umbilic-count sweep, §P8.5) each build a valid,
+    """F4's four spectra (umbilic-count sweep) each build a valid,
     distinct band-limited field from the same machinery as F1."""
     prev_rms = None
     for power in F4_SPECTRA:

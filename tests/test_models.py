@@ -161,7 +161,7 @@ def test_gaussian_baseline_matches_the_data_moments():
 
 
 def test_variance_floor_blurs_by_the_amount_it_says():
-    """§4(b): ``sigma`` convolves the target with N(0, sigma^2), so the samples
+    """The variance floor: ``sigma`` convolves the target with N(0, sigma^2), so the samples
     should be wider than the data by that much and no more.
 
     The floor exists for near-singular targets, where flow matching is ill-posed
@@ -179,7 +179,7 @@ def test_variance_floor_blurs_by_the_amount_it_says():
 
 
 def test_truncated_sampling_rescales_by_t_end_not_one_minus_t_end():
-    """§4(c): the training path is ``(1-t) z0 + t z1``, so stopping at ``t_end``
+    """Truncated sampling: the training path is ``(1-t) z0 + t z1``, so stopping at ``t_end``
     shrinks the sample by ``t_end`` and ``rescale`` must divide by that.
 
     Dividing by ``1 - t_end`` is the natural-looking mistake and inflates samples
@@ -248,12 +248,12 @@ def test_rho_fields_are_bandwidth_independent():
         assert np.allclose(a.encode(X, fields=fields), b.encode(X), atol=1e-12)
 
 
-def test_rho_fields_refuse_the_adjoint():
-    """The adjoint's ρ *is* fitted at a specific bandwidth, so reusing it across L
-    would be silently wrong. Refuse rather than return something plausible."""
+def test_rho_fields_refuse_a_fitted_method():
+    """A ``spectral`` ρ *is* fitted at a specific bandwidth, so reusing it across
+    L would be silently wrong. Refuse rather than return something plausible."""
     X, F, S = _bottles(n=2)
     with pytest.raises(ValueError, match="(?i)direct"):
-        RhoBasis(S, F, L=4, method="adjoint").rho_fields(X)
+        RhoBasis(S, F, L=4, method="spectral").rho_fields(X)
 
 
 def test_rho_is_rotation_invariant():

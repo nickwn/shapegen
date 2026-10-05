@@ -1,7 +1,7 @@
 """Dry run: smoothed FaceScape heads -> codes -> flow matching -> heads.
 
-Runs against either representation. ``--basis rho`` (the default) is the one
-``SH_FLOW_PLAN.md`` proposes: the model's output *is* a band-limited SH
+Runs against either representation. ``--basis rho`` (the default) is the
+ρ̂ flow: the model's output *is* a band-limited SH
 coefficient vector of ρ, and decoding is the spin transform. ``--basis pca`` is
 the position baseline, which on registered faces is measurably better, and it is
 kept reachable so that comparison stays checked rather than remembered.
@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from shapegen import codec                                    # noqa: E402
 from shapegen.data import faces                               # noqa: E402
-from shapegen.geom import dirac                               # noqa: E402
+from shapegen.geom import dirac_spectral as dspec             # noqa: E402
 from shapegen.geom.mesh import Mesh                           # noqa: E402
 from shapegen.models.basis import PCABasis, RhoBasis          # noqa: E402
 from shapegen.models.flow import (gaussian_baseline,          # noqa: E402
@@ -90,9 +90,9 @@ def main():
     ap.add_argument("--steps", type=int, default=20000)
     ap.add_argument("--t-smooth", type=float, default=1e-4)
     ap.add_argument("--sigma", type=float, default=0.0,
-                    help="SH_FLOW_PLAN 4(b): variance floor on the target")
+                    help="variance floor on the target")
     ap.add_argument("--t-end", type=float, default=1.0,
-                    help="SH_FLOW_PLAN 4(c): stop the ODE short of t=1")
+                    help="stop the ODE short of t=1")
     ap.add_argument("--cache", default=None,
                     help="npz from scripts/encode_faces.py; skips load+encode")
     ap.add_argument("--out", default="reports/faces")
@@ -142,8 +142,8 @@ def main():
     print(f"       {label}", flush=True)
 
     # 1. Basis-appropriate sanity. PCA at full rank spans the centred training
-    #    set exactly; rho is not a linear basis, so the contract there is that it
-    #    reproduces what the codec itself reports for the same encode.
+    #    set exactly; for rho the basis must reproduce codec.encode(method=
+    #    "direct") on the same sphere.
     if rho:
         e_b = mean_shape_error(Xtr[:6],
                                basis.decode(basis.encode(Xtr[:6], fields=f_tr[:6])))
@@ -158,9 +158,8 @@ def main():
 
     # 2. Held-out reconstruction: the ceiling the generative model inherits and
     #    cannot beat, whatever the flow does afterwards.
-    # A rho decode is an eigensolve on a 4n x 4n matrix -- 5.6 s per 26k-vertex
-    # head -- so the reconstruction checks run on a subset. PCA decodes are a
-    # matrix product and can use everything.
+    # A rho decode is a spectral solve (seconds per head), so the reconstruction
+    # checks run on a subset. PCA decodes are a matrix product and use everything.
     nd = 12 if rho else len(Xte)
     enc_te = ((lambda b: b.encode(Xte[:nd], fields=f_te[:nd])) if rho
               else (lambda b: b.encode(Xte)))
@@ -228,7 +227,7 @@ def main():
           f"{d99} directions hold 99% of {kdim} nominal; "
           f"N/d_eff = {len(Z) / d_eff:.1f}", flush=True)
 
-    # 8. rho-specific: the gauge everything assumed was broken.
+    # 8. rho-specific: codes on a shared template must be rotation-invariant.
     if rho:
         rng = np.random.default_rng(0)
         Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
@@ -284,11 +283,12 @@ def main():
     check("flow is at least as good as a diagonal Gaussian", cf <= cg * 1.05,
           f"flow {cf:.5f} vs gaussian {cg:.5f}")
 
-    # 9/10. rho-specific. gamma falls out of the decode for free and is a genuine
-    #       off-manifold score: no other representation here hands you one.
+    # 9/10. rho-specific. gamma, the Dirac residual of a code's rho field on the
+    #       base sphere, is an off-manifold score no other representation offers.
     if rho:
-        gam = lambda C: np.array([dirac.spin_transform(basis.sphere, F,
-                                                       basis.rho_field(c))[1]
+        Ls = dspec.spinor_band(basis.L, dspec.potential_band_extra(basis.L))
+        gam = lambda C: np.array([dspec.solve_spinor(c * basis.scale + basis.mean,  # noqa: E731
+                                                  basis.L, Ls=Ls).gamma
                                   for c in C[:6]])
         g_tr, g_gen = gam(Z), gam(S)
         print(f"       gamma: train {g_tr.mean():.3e}, generated {g_gen.mean():.3e}")

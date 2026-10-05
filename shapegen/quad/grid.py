@@ -1,77 +1,49 @@
-"""Grid tracing on the whole sphere (PLAN.md §P6), replacing
-:mod:`shapegen.quad.extract`.
+"""Grid tracing on the whole sphere.
 
-Given cones that :mod:`shapegen.quad.periods` has already placed on the
-lattice, this walks the developing map's square grid over the *entire*
-sphere and assembles a **closed** quad mesh. The module it replaces marched
-in one stereographic chart with three tuned tolerances and capped at 91%
-coverage with hundreds of spurious irregular vertices (on the P0 reference
-configuration: 98 of valence 2, 275 of valence 3 where only 8 cones exist,
-77 of valence 5).
+Given cones that :mod:`shapegen.quad.periods` has placed on the lattice, walk
+the developing map's square grid over the *entire* sphere and assemble a
+**closed** quad(-dominant) mesh. :func:`quad_grid` is the entry point; it
+returns a :class:`QuadGrid` carrying the diagnostics (``euler``,
+``coverage``, ``merge_residual``, ``frame_residual``) that say whether to
+trust it.
 
-Three changes carry all of the difference.
-
-**1. Two charts, so the trace never runs out of plane.** The developing
-map's derivative is the meromorphic function
+**Two charts.** The developing map's derivative is the meromorphic function
 
     W(z) = prod_k (z - C_k)^(-idx_k)
 
-and the object being integrated is the 1-form ``omega = W dz``, not ``W``
-itself. Gauss-Bonnet forces ``sum_k idx_k = 2`` on a genus-0 field, so
-``W ~ z^-2`` and in the coordinate ``zeta = 1/z``
+and the object integrated is the 1-form ``omega = W dz``. Gauss-Bonnet forces
+``sum_k idx_k = 2``, so ``W ~ z^-2`` and in ``zeta = 1/z``
 
     omega = -prod_k (1 - C_k zeta)^(-idx_k) dzeta
 
-is **regular and non-vanishing at zeta = 0**. The chart's excluded pole is
-an ordinary point of the flat structure: there is no cone there and nothing
-degenerates.
+is regular and non-vanishing at ``zeta = 0``: the chart pole is an ordinary
+point of the flat structure, with no hidden singularity. Each chart is used
+only on its own hemisphere, which removes the coordinate blow-up of the step
+size near the other chart's pole.
 
-> :mod:`~shapegen.quad.extract` argues the opposite -- that any finite cone
-> set forces an implicit extra singularity wherever the pole is put, so
-> local cell size shrinks without bound approaching it and coverage can only
-> climb asymptotically. That argument needs ``sum_k a_k != 0``; Gauss-Bonnet
-> makes it exactly ``-2``, which is the one value that cancels the ``dz``
-> pole of order 2 at infinity. Nor is the measured 0.911 ceiling asymptotic:
-> it is ``r^2/(r^2+1)`` evaluated at that module's own hard-coded
-> ``refuse_radius = 3.2``, to three digits. Chart step size does blow up
-> towards the pole -- ``|W| -> 0`` there, so a fixed developed step is an
-> ever larger step in ``z`` -- which is a coordinate artifact, and is what
-> using each chart only on its own hemisphere removes.
+**Adaptive substep.** Each cell is integrated with RK4 in developed arc
+length, the substep capped by a fraction of the distance to the nearest cone
+and an absolute fraction of the chart (:func:`trace_step`). There is no
+fixed substep count to tune, and a step that ends on a cone (velocity
+``~ dist^(1/4)``) refines itself.
 
-**2. An adaptive substep instead of a tuned ``nsub``.** Each cell is
-integrated with RK4 in developed arc length, with the substep capped by the
-local geometry -- a fraction of the distance to the nearest cone, and an
-absolute fraction of the chart -- rather than by a constant.
-``extract.py`` needed ``nsub=1`` to reproduce the reference corpus and
-``nsub=8`` to stop a real face producing bowtie quads. Here there is no
-such number to get wrong, and a step that *ends* on a cone, where the
-velocity vanishes like ``dist^(1/4)`` and any fixed substep count
-undershoots, refines itself.
+**Connectivity from a rotation system.** Every traced edge records its
+outgoing tangent at both ends; faces are the orbits of ``phi = sigma . alpha``
+on darts (:func:`faces_from_rotation`). Every dart lies in exactly one orbit,
+so the output is a closed surface by construction and ``V - E + F`` is a
+measurement. Cones need no special case: a cone on a lattice point becomes a
+valence-3 (or 5) vertex, one on a cell centre a triangular (or pentagonal)
+face.
 
-**3. Connectivity from a rotation system, not from 4-cycles.** Every traced
-edge records its outgoing tangent at both ends, and faces are the orbits of
-``phi = sigma . alpha`` on darts (``alpha`` = flip the dart, ``sigma`` = the
-next dart counter-clockwise around its vertex). That is purely
-combinatorial: every dart lands in exactly one orbit, so the output is a
-closed surface by construction and ``V - E + F`` becomes a real measurement
-instead of a hope. Cones need no special case -- a cone whose developed
-image is a lattice point becomes a valence-3 (or 5) vertex, one that lands
-on a cell centre becomes a triangular (or pentagonal) face, and both fall
-out of the same traversal. The old path searched an adjacency graph for
-4-cycles and then dropped whatever failed a planarity score
-(``closure_defects``), which discards real quads and keeps spurious ones.
+**Where the cones land.** :func:`~shapegen.quad.periods.solve_lattice` puts
+every loop period on ``s.Z[i]``, which places cone offsets on
+``((1-i)/2).s.Z[i]``: half on lattice points, half on cell centres (the
+latter come out as triangles). ``sublattice="(1+i)Z[i]"`` puts every cone on
+a lattice point for a pure quad mesh, at a smaller cell (0.025 vs 0.070 on
+the P0 corpus, ~8x the faces). :func:`quad_grid` reports which happened in
+``cone_vertices`` and ``face_degrees`` rather than choosing.
 
-**Where the cones land, and what a pure quad mesh costs.**
-:func:`~shapegen.quad.periods.solve_lattice` asks that every loop period lie
-on ``s.Z[i]``. A same-index loop's period is ``(1+i)`` times its cut
-integral, so that places the cone *offsets* on ``((1-i)/2).s.Z[i]``: half on
-lattice points, half on cell centres. Both are 4-fold symmetry centres of
-the square grid, so the trace closes either way, but the cell-centre ones
-come out as triangular faces. ``sublattice="(1+i)Z[i]"`` tightens the target
-by an index-2 sublattice and puts every cone on a lattice point, for a pure
-quad mesh -- at the price of a smaller cell (0.025 rather than 0.070 on the
-P0 corpus, so ~8x the faces). :func:`quad_grid` reports which happened, in
-``cone_vertices`` and ``face_degrees``, rather than choosing for the caller.
+It replaced a single-chart extractor whose coverage was capped at 0.911.
 """
 
 from __future__ import annotations
@@ -179,11 +151,11 @@ def _cone_coords(cones: np.ndarray, c: int) -> np.ndarray:
 def _quantum(a: np.ndarray) -> float:
     """``q`` such that every ``a_k = n_k q`` with integer ``n_k``. For
     ``|idx| = 1/4`` cones ``q = 1/4`` and ``psi = prod f_k^{n_k}`` is
-    genuinely single-valued, so its argument has an honest ``2*pi`` period:
-    unwrap *there*, then scale by ``q``. Unwrapping ``arg W`` at ``2*pi``
-    instead is a grid four times too coarse to see its real ``pi/2``
-    ambiguity, and silently rotates the trace by ``i`` -- see
-    :func:`shapegen.quad.extract.psi_log`, which records that bug."""
+    single-valued, so its argument has an honest ``2*pi`` period: unwrap
+    *there*, then scale by ``q``.
+
+    Trap: unwrapping ``arg W`` itself at ``2*pi`` is four times too coarse to
+    see its real ``pi/2`` ambiguity and silently rotates the trace by ``i``."""
     nz = np.abs(a[np.abs(a) > 1e-12])
     return float(nz.min()) if len(nz) else 1.0
 
@@ -203,8 +175,7 @@ def _factors(zeta: np.ndarray, c: np.ndarray, cones: np.ndarray) -> np.ndarray:
 def form_log_abs(zeta: np.ndarray, c: np.ndarray, cones: np.ndarray,
                  a: np.ndarray) -> np.ndarray:
     """``log|W|`` in each point's own chart, by log-sum -- never a product of
-    magnitudes, which overflows in the far field (``wavefront.py``'s bug,
-    PLAN.md §P6.2)."""
+    magnitudes, which overflows in the far field."""
     F = _factors(zeta, c, cones)
     return (a[None, :] * np.log(np.abs(F))).sum(axis=1)
 
@@ -278,23 +249,18 @@ def trace_step(zeta0: np.ndarray, c0: np.ndarray, arg0: np.ndarray,
     Each point picks its own substep, each iteration, as the largest that
     moves no more than ``near_frac`` of its distance to the nearest cone and
     no more than ``abs_cap`` in chart coordinates -- clipped to whatever
-    developed length it has left. That cap is what makes a step which *ends*
-    on a cone work: the velocity there vanishes like ``dist^(1/4)``, so the
-    cap shrinks geometrically as the trace closes in, and the point
-    approaches from one side instead of stepping across. No fixed substep
-    count does that and stays cheap in the open field as well.
+    developed length it has left. The cone cap is what makes a step
+    that *ends* on a cone work: the velocity there vanishes like
+    ``dist^(1/4)``, so the cap shrinks geometrically and the point approaches
+    from one side instead of stepping across.
 
-    A point is finished when the developed length it has left would move it
+    A point is finished when its remaining developed length would move it
     less than ``pos_tol`` *in the chart*, not when that length reaches zero.
-    The difference is the whole cone case: there the cap is
-    ``near_frac`` of the distance to the cone, so the point closes on it
-    geometrically and the remaining arc length is an infinite series that
-    never terminates -- at ``near_frac = 0.05`` it was still ``1.7e-9`` of a
-    cell after 4000 iterations, i.e. sitting ``7e-16`` from the cone and
-    formally unfinished. Converting the criterion to a position makes it
-    terminate in a few hundred iterations at the *same* answer, and leaves
-    regular steps unaffected (they end the moment what is left fits in one
-    substep).
+    Trap: approaching a cone the remaining arc length is a geometric series
+    that never reaches zero, so a length criterion runs out ``max_iter``
+    while sitting ~1e-16 from the cone; the position criterion terminates in
+    a few hundred iterations at the same answer and does not affect regular
+    steps.
 
     Returns ``(zeta, chart, argW, iterations, ok)``. ``ok`` is false only for
     a point that ran out of iterations; :func:`quad_grid` counts those as
@@ -351,8 +317,7 @@ def _cut_from_cone(k: int, target: complex, cones: np.ndarray, a: np.ndarray,
     The integrand carries an algebraic endpoint singularity ``rho^{a_k}`` at
     the cone that ordinary quadrature never resolves; Gauss-Jacobi with that
     exponent as its weight reaches machine precision in a dozen-odd nodes
-    (PLAN.md §P5.1 -- :mod:`shapegen.quad.periods` uses the same nodes for
-    the period solve). Taking ``(z - C_k)^{a_k} = rho^{a_k} e^{i a_k theta}``
+    (:mod:`shapegen.quad.periods` uses the same nodes). Taking ``(z - C_k)^{a_k} = rho^{a_k} e^{i a_k theta}``
     along the fixed ray angle and unwrapping the remaining factors outwards
     from the cone pins the branch, and with it the grid's absolute
     orientation, which nothing upstream fixes.
@@ -386,24 +351,20 @@ def seed_vertex(cones: np.ndarray, idx: np.ndarray, s: float, anchor: int = 0,
     """A first grid vertex, placed so that cone ``anchor`` falls exactly on a
     lattice point of the grid about to be traced.
 
-    That alignment is the seed's whole job, and skipping it is fatal rather
-    than merely inelegant. The period solve pins the cones to one another on
-    ``((1-i)/2).s.Z[i]``, every point of which is a 4-fold symmetry centre of
-    the square grid -- but only *relative* to each other. Seeding anywhere
-    else puts cone ``anchor`` at a generic offset, where a quarter turn of
-    holonomy does not map the grid to itself and nothing closes up.
+    The period solve pins the cones only *relative* to one another (on
+    ``((1-i)/2).s.Z[i]``, all 4-fold symmetry centres of the grid). Seeding
+    anywhere else puts cone ``anchor`` at a generic offset, where a quarter
+    turn of holonomy does not map the grid to itself and nothing closes.
 
-    So: probe a regular point a little off the cone, integrate
+    Method: probe a regular point a little off the cone, integrate
     ``w(probe) - w(C_anchor)`` exactly, and walk off its fractional part.
     Returns ``(zeta, chart, argW)`` of the resulting vertex, as length-1
     arrays.
 
-    ``near_frac``/``abs_cap`` govern that last walk and must be passed
-    through by the caller rather than left at the tracer's own defaults: an
-    error here is not one vertex's error, it is a rigid offset of the entire
-    grid from the lattice, which every later vertex inherits. Leaving it at
-    the default was measured as a hard floor of ``1.3e-7`` on
-    ``merge_residual`` that no amount of tightening elsewhere could get past.
+    Trap: ``near_frac``/``abs_cap`` govern that last walk and must be passed
+    through from the caller, not left at :func:`trace_step`'s defaults. An
+    error here is a rigid offset of the whole grid; at the tracer defaults it
+    put a floor of ``1.3e-7`` on ``merge_residual``.
     """
     cones = np.asarray(cones, dtype=complex)
     a = -np.asarray(idx, dtype=float)
@@ -461,19 +422,14 @@ class QuadGrid:
     cone's developed image is a cell centre rather than a lattice point (see
     the module docstring).
 
-    ``euler`` and ``coverage`` are the two numbers that make a plausible
-    looking quad mesh wrong, so they travel with it, in the spirit of
-    PLAN.md §4: ``euler`` must be 2 and ``coverage`` 1.0 for the mesh to be
-    a closed cover of the sphere. ``merge_residual`` is the trace's real
-    accuracy figure -- how far apart two independent arrivals at one vertex
-    were, as a fraction of the local cell -- and ``frame_residual`` checks
-    that every such re-arrival differed from the stored frame by a power of
-    ``i``, which a wrong merge would not. That check is skipped, and
-    ``frames`` is meaningless, at the cone vertices themselves: there the
-    grid directions are ``2pi/(4 -+ 1)`` apart rather than ``pi/2``, which is
-    the definition of a cone rather than a defect to detect. Face
-    connectivity does not use ``frames`` at all -- it uses the traced
-    tangents, which are honest 3-vectors and carry no branch.
+    Diagnostics: ``euler`` must be 2 and ``coverage`` 1.0 for the mesh to be
+    a closed single cover of the sphere. ``merge_residual`` is the trace's
+    accuracy -- the worst disagreement between independent arrivals at one
+    vertex, as a fraction of the local cell. ``frame_residual`` checks every
+    re-arrival differed from the stored frame by a power of ``i`` (a wrong
+    merge would not); it is skipped, and ``frames`` is meaningless, at cone
+    vertices, where grid directions are ``2pi/(4 -+ 1)`` apart by definition.
+    Face connectivity uses the traced tangents, not ``frames``.
     """
     points: np.ndarray            # (n,3) unit vectors
     frames: np.ndarray            # (n,3) unit tangent = developed direction +1
@@ -543,28 +499,20 @@ def quad_grid(cones, idx, s: float, anchor: int = 0, merge_frac: float = 0.25,
     reached, which on a correctly solved configuration is when the grid has
     closed over the whole sphere.
 
-    ``merge_frac`` is the only tolerance left and it is not a tuned one: two
+    ``merge_frac`` (fraction of the step chord) is not a tuned tolerance:
     distinct grid vertices are a full cell apart while independent arrivals
-    at the same vertex agree to ~1e-12 of a cell (``merge_residual`` reports
-    the worst), so anything from ~1e-6 to ~0.45 gives the identical mesh.
-    Contrast :mod:`~shapegen.quad.extract`, whose threshold had to separate
-    freshly traced *intermediate* points and where changing it changed the
-    output.
+    at one vertex agree far more closely (``merge_residual`` reports the
+    worst), so a wide range of values gives the identical mesh.
 
-    Vertices that land on a cone are not expanded. They do not need to be --
-    deleting a cone from a quad mesh leaves its neighbours connected through
-    the faces around it, so the BFS still reaches everything -- and the
-    velocity vanishes there, which is the one place the trace's accuracy
-    would otherwise degrade (RK4 against a ``t^(4/3)`` endpoint). Their
-    position is snapped to the cone, which is known exactly.
+    Vertices that land on a cone are snapped to it (the cone position is
+    exact; RK4 against the ``t^(4/3)`` endpoint is not) and not expanded --
+    the BFS still reaches their neighbours through the surrounding faces.
 
-    ``near_frac`` and ``abs_cap`` are accuracy, not correctness: the
-    integrator is 4th order in both (a single step's Richardson ratios
-    measured 11.3, 14.4, 15.6, 15.9 against the ideal 16), and the topology
-    -- ``euler``, the valences, the face degrees -- is unchanged by either
-    across every setting tried. At the defaults, ``merge_residual`` on the
-    cube fixture is ~1e-8 of a cell; halving both takes roughly twice the
-    time for ~16x the accuracy, and neither buys a different mesh.
+    ``near_frac`` and ``abs_cap`` set accuracy, not topology: the integrator
+    is 4th order in both, and ``euler``, valences and face degrees are
+    unchanged across every setting tried. At the defaults ``merge_residual``
+    on the cube fixture is ~1e-8 of a cell; halving both costs ~2x time for
+    ~16x accuracy. Stops early with ``converged=False`` at ``max_vertices``.
     """
     cones = np.asarray(cones, dtype=complex)
     idx = np.asarray(idx, dtype=float)
@@ -726,8 +674,7 @@ def faces_from_rotation(points: np.ndarray, edges: np.ndarray, dart_tan):
     counter-clockwise around its own vertex, so ``phi`` turns one corner and
     its orbits are exactly the faces of the embedded graph. Every dart lies
     in precisely one orbit, so the result is a closed surface however good or
-    bad the geometry is -- which is what makes ``V - E + F`` a measurement of
-    the trace rather than an assumption built into the extractor.
+    bad the geometry is, and ``V - E + F`` measures the trace.
 
     The counter-clockwise order comes from the traced tangents (``dart_tan``
     holds each edge's outgoing tangent at both endpoints) about the outward
@@ -785,9 +732,7 @@ def spherical_area(P: np.ndarray) -> float:
     """Solid angle of the spherical polygon through the unit vectors ``P``,
     by fanning from its first vertex and summing signed spherical excesses.
     Over a closed mesh the total is ``4*pi`` exactly when the mesh covers the
-    sphere once -- which is what ``coverage`` reports, and it is a real
-    measurement, not the old ``r^2/(r^2+1)`` estimate from a bounding
-    radius."""
+    sphere once, which is what ``coverage`` reports."""
     tot = 0.0
     for i in range(1, len(P) - 1):
         A, B, C = P[0], P[i], P[i + 1]
@@ -812,8 +757,9 @@ def developed_cell_area(grid: QuadGrid, cones, idx) -> np.ndarray:
     cell of developed area ``s^2`` must occupy solid angle
     ``s^2 . (2/(1+|z|^2))^2 / |W(z)|^2``. This ratio is 1 where the trace and
     the conformal factor agree, so it measures the trace's accuracy against
-    the continuum rather than against itself, and its *spread* is the
-    genuine, inherent area variation of a conformal quad mesh (PLAN.md §10).
+    the continuum rather than against itself (median 1.000000 on the cube
+    fixture). Its *spread* is the inherent area variation of a conformal quad
+    mesh (63x interdecile on the P0 corpus).
     """
     cones = np.asarray(cones, dtype=complex)
     a = -np.asarray(idx, dtype=float)
@@ -865,27 +811,21 @@ def cell_for_faces(cones, idx, n_faces: int, n_samples: int = 200_000) -> float:
     """The cell size whose grid has about ``n_faces`` faces --
     ``sqrt(developed_area / n_faces)``.
 
-    Mesh density otherwise comes out of
-    :func:`~shapegen.quad.periods.solve_lattice` by accident: it returns the
-    *largest* cell in its sweep that solves, and which one that is depends on
-    the cone layout, not on anything the caller wants. Measured on three
-    FaceScape heads at L=32, all with 8 cones, it landed on 0.140, 0.100 and
-    0.025 -- 279, 553 and 8644 faces for the same kind of object. Feeding
-    this function's answer in as the top of ``cell_sizes`` makes the request
-    the thing that decides.
+    Without it, :func:`~shapegen.quad.periods.solve_lattice` returns the
+    *largest* cell in its stock sweep that solves, which depends on the cone
+    layout rather than on what the caller wants (a 2-7x face-count span
+    across heads with the same 8 cones at L=32).
 
-    **The result is a request, not a usable cell size -- do not pass it
-    straight to :func:`quad_grid`.** Only cell sizes the period solve has
-    accepted make the grid close: on the cube fixture, only ``edge/m`` for
-    integer ``m`` works, and asking for 200 faces gives ``0.1409``, i.e.
-    ``edge/5.77``, which traces to Euler characteristic ``-5430`` with
-    ``merge_residual`` saturated at the merge tolerance. Feed it to
-    :func:`~shapegen.quad.periods.solve_lattice` as the top of a *descending*
-    ``cell_sizes`` ladder and use what comes back.
+    **Trap: the result is a request, not a usable cell size -- do not pass it
+    straight to :func:`quad_grid`.** Only cell sizes the period solve accepts
+    make the grid close (on the cube, only ``edge/m`` for integer ``m``; 200
+    faces asks for ``edge/5.77``, which traces to Euler characteristic
+    ``-5430``). Use it as the top of a *descending* ``cell_sizes`` ladder
+    (:func:`shapegen.quad.pipeline.cell_ladder`) and take what comes back.
 
-    The prediction itself is good to a few percent (the error is the cones,
-    where a face covers 3/4 or 5/4 of a cell, and the ``r^(-1/2)`` spikes in
-    the integrand), so expect to land near the count asked for, not on it.
+    The prediction is good to a few percent (cone faces cover 3/4 or 5/4 of
+    a cell; the integrand has ``r^(-1/2)`` spikes); with ``--faces 20000``
+    in the demo, results land within 0.4% of target.
     """
     return float(np.sqrt(developed_area(cones, idx, n_samples) / max(n_faces, 1)))
 
@@ -895,9 +835,9 @@ def quad_isotropy(points: np.ndarray, faces) -> np.ndarray:
 
     The developing map is conformal, so a cell that is a perfect square in
     the developed plane comes back a near-square *on the sphere* too, up to
-    the second-order variation of the conformal factor across one cell. That
-    makes this a genuine accuracy measure, unlike the developed edge lengths,
-    which are ``s`` by construction and check nothing."""
+    the second-order variation of the conformal factor across one cell --
+    an accuracy measure, unlike developed edge lengths (``s`` by
+    construction)."""
     out = []
     for f in faces:
         P = points[f]

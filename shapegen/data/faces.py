@@ -1,60 +1,46 @@
 """Smoothed-head dataset from FaceScape ``models_reg``.
 
-Serves both representations, and they want different preprocessing:
+The meshes are **full heads**, not face masks: bbox 209 x 275 x 209 mm, with
+cranium, ears and a neck stub; 26317 vertices, 52261 faces, four boundary loops
+(neck 96, mouth 96, eye sockets 91/94); connectivity identical across every
+downloaded root.
+
+Both representations are served, and they want different preprocessing:
 
 ===============  ==================  ==================================
 stage            positions (PCA)     ρ̂ (spin codec)
 ===============  ==================  ==================================
-``cap``          off                 **on** — cMCF, the Dirac eigensolve
-                                     and the cotan-Poisson integration
-                                     are undefined with boundary
-``align``        on (worth 5-7%)     **off** — ρ is exactly
+``cap``          off                 **on** -- the sphere map and the ρ
+                                     codec are defined for closed genus-0
+                                     surfaces only
+``align``        on (worth 5-7%)     **off** -- ρ is exactly
                                      rotation-invariant on a shared
-                                     template, measured 4e-15, so
-                                     aligning is pure cost
-``smooth``       on                  **on**, and it matters more: H is a
-                                     second derivative, so it amplifies
-                                     scan noise by ~ℓ²
+                                     template (measured 4e-15)
+``smooth``       on                  **on**, t=1e-4
 ===============  ==================  ==================================
 
-The caps are invented geometry — the neck opening alone is a 168 mm hole closed
-by a single centroid fan — which is why they are off unless ρ asks for them.
+The caps are invented geometry (the neck opening is a 168 mm hole closed by one
+centroid fan), which is why they are off unless ρ needs them.
 
-What the meshes actually are: a **full head**, not a face mask — bbox 209 x 275
-x 209 mm, so as deep as it is wide, with cranium, ears and a neck stub. Four
-boundary loops (neck 96, mouth 96, two eye sockets 91/94), 26317 vertices,
-52261 faces, connectivity identical across every downloaded root.
+Stages, in order:
 
-Three stages, in this order, each measured on 200 subjects (train 160, held-out
-40, scored against the smoothed test face):
-
-    align      Procrustes to the iterated mean. 13.5% of the raw spread is pose;
-               removing it is worth 5-7% at useful k and costs ~1 s for 200.
-    smooth     implicit Laplacian ``(M + tL)V' = M V``. **This is the one that
-               matters.** PCA on raw heads *plateaus* at ~0.0106 (k=64 -> 128
-               barely moves) because that floor IS the per-mesh scan noise:
-               uncorrelated across subjects, so no basis can represent it, and it
-               sits in the target. Smooth the target and the curve keeps falling
-               — 0.0038 at k=128, **2.8x better**. (That 2.8x was scored against
-               the *smoothed* test face, so it is inflated by the same
-               moving-reference confound documented in :func:`build_dataset`;
-               treat it as directional. The ρ-codec figures below are scored
-               against the raw scan and are not.)
-
-               For ρ̂ the amount was swept properly — ``remesh=0.8``, L=32,
-               ``residual``, 6 heads, chamfer against the **raw** head, face
-               region in brackets: t=0 gives 0.02905 [0.02452], 1e-4 gives
-               0.02611 [**0.01727**], 3e-4 gives 0.02601 [0.01785], 1e-3 gives
-               0.02640 [0.01918], 1e-2 gives 0.02985 [0.02391]. So removing it
-               costs 29.6% on the face, and the old 1e-3 default was ten times
-               too strong — **1e-4** is the optimum and is worth 10% on the face
-               over 1e-3.
+    align      Procrustes to the iterated mean. 13.5% of the raw spread is pose.
+    smooth     implicit Laplacian ``(M + tL)V' = M V``. Scan noise is
+               uncorrelated across subjects, so no basis can represent it: raw
+               PCA plateaus at ~0.0106 (k=64 -> 128 barely moves), smoothed PCA
+               keeps falling (0.0038 at k=128; scored against the smoothed test
+               face, so directional only). For ρ it matters more, because H is a
+               second derivative and amplifies noise by ~ℓ². The amount: at
+               ``remesh=0.8``, L=32, 6 heads, face-region chamfer against the raw
+               scan, **t=1e-4** is the optimum; t=0 costs ~30% on the face and
+               1e-3 ~10% (measured with the since-removed residual encoder and
+               mesh decoder; not re-measured on the current codec).
+    resample   optional, see :func:`build_dataset`.
     encode     see :mod:`shapegen.models.basis`.
 
-Caveat worth carrying: a large share of those 26317 vertices sit on the bald
-cranium and neck, which are nearly featureless and nearly identical between
-subjects. A mean shape error over the whole head therefore flatters any model —
-a basis that nails the skull and fumbles the nose still scores well.
+**Trap:** most of those vertices are bald cranium and neck, nearly featureless
+and nearly identical between subjects, so a whole-head mean error flatters any
+model. Score the face region separately (see :func:`build_dataset`).
 """
 
 from __future__ import annotations
@@ -101,13 +87,10 @@ def load_heads(roots, expressions="1_neutral", limit: int | None = None,
     the remaining spread is head pose. Run :func:`procrustes_align` for that.
 
     ``cap`` closes the four boundary loops with centroid fans. **Required for the
-    ρ codec** — cMCF, the Dirac eigensolve and the cotan-Poisson integration are
-    all undefined with boundary — and pointless for a position model, which is
-    why it is off by default. The cap face list is computed once from the first
-    mesh and replayed on every other, so the set stays registered; only the four
-    centroids move. Note the mouth cap is invented geometry whose boundary shifts
-    with expression, so on a multi-expression set it enters the codes looking
-    like measured shape.
+    ρ codec** (the sphere map and ρ are defined for closed genus-0 surfaces
+    only), pointless for a position model, hence off by default. The cap face
+    list is computed once from the first mesh and replayed on every other, so the
+    set stays registered; only the four centroids move.
     """
     roots = [Path(roots)] if isinstance(roots, (str, Path)) else [Path(r) for r in roots]
     exprs = [expressions] if isinstance(expressions, str) else list(expressions)
@@ -182,11 +165,9 @@ def laplacian_smooth(V: np.ndarray, F: np.ndarray, t: float = 1e-3) -> np.ndarra
 
     Solves ``(M + tL) V' = M V`` — unconditionally stable, so a single solve
     reaches any smoothing scale, and ``t`` sets that scale directly. At
-    ``t=1e-3`` a normalised FaceScape head moves ~0.98% (about 2 mm), which is
-    where the scan noise lives and well below any real feature.
-
-    Explicit smoothing (``V += tLV``) would need many tiny steps for the same
-    scale and shrinks the shape as it goes.
+    ``t=1e-3`` a normalised FaceScape head moves ~0.98% (about 2 mm). The dataset
+    default is ``t=1e-4`` (see the module docstring); the ``1e-3`` default here
+    is only the function's.
     """
     L, M = cotan_laplacian(V, F)
     solve = spla.factorized((M + t * L).tocsc())
@@ -196,31 +177,21 @@ def laplacian_smooth(V: np.ndarray, F: np.ndarray, t: float = 1e-3) -> np.ndarra
 def isotropic_remesh(V, F, target_pct: float = 0.8, iterations: int = 6):
     """Isotropic explicit remeshing via pymeshlab. Returns ``(V2, F2)``.
 
-    FaceScape's registered mesh is badly shaped — min angle **0.04°** with 24.9%
-    of triangles under 20° — and cMCF carries that faithfully onto the sphere.
-    Remeshing attacks the source: measured at ``target_pct=0.8``, min angle rises
-    to 0.49°, triangles under 20° fall to **0.5%**, and the resulting conformal map
-    is far better, **qc 0.0059 against 0.03**.
+    FaceScape's registered mesh is badly shaped -- min angle **0.04°**, 24.9% of
+    triangles under 20°. At ``target_pct=0.8`` the min angle rises to 0.49° and
+    triangles under 20° fall to 0.5%. :func:`build_dataset` remeshes the mean
+    head before building its sphere map.
 
-    **It does not fix the sphere, and on its own it makes things worse.** A uniform
-    head maps to a sphere with 1.4e8 area spread (the source mesh gave 2.1e6),
-    because a conformal map cannot be uniform on both sides — that is what
-    conformal area distortion *is*. Encoding on that sphere reconstructs at
-    0.054-0.067 against the icosphere route's 0.034-0.037. So remeshing belongs
-    *before* the resampling, never instead of it.
+    ``target_pct`` is a percentage of the bounding-box diagonal (~404 mm for a
+    head); **smaller means more vertices**: 0.8 gives ~17k from 26k, 2.5 gives
+    ~1.9k (10 mm edges, wider than a nostril). 0.8 is the default. Measured with
+    the removed cMCF sphere and mesh decoder: remeshing at all was worth ~14%;
+    2.5% -> 0.8% was worth 8% whole-head and 0% on the face; 0.4% bought nothing
+    over 0.8% at 4x the vertices.
 
-    ``target_pct`` is a percentage of the bounding-box diagonal; **smaller means
-    more vertices** (0.8 gives ~17k from FaceScape's 26k, 2.5 gives ~4k).
-
-    **The target barely matters between 0.8 and 2.5** — under 1% of reconstruction
-    error when scored honestly. 5.0 is worse. Remeshing *at all* is what pays
-    (~14%); which target you pick is nearly free. See
-    ``scripts/encode_faces.py`` for the table and for why an earlier claim of
-    25-32% and "coarser is better" was an artifact of a moving reference.
-
-    Note this **breaks the registered correspondence** — the output is a new vertex
-    set. :func:`build_dataset` restores a shared topology afterwards by composing
-    the remesh's barycentric weights with the icosphere resampling's.
+    **Breaks the registered correspondence** -- the output is a new vertex set.
+    :func:`build_dataset` restores a shared topology by composing the remesh's
+    barycentric weights with the icosphere resampling's.
     """
     import pymeshlab  # noqa: PLC0415
     ms = pymeshlab.MeshSet()
@@ -240,39 +211,43 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-4,
                   limit: int | None = None, verbose: bool = False):
     """``roots -> (X (N,n,3), F)``: loaded, aligned, smoothed heads.
 
-    ``t_smooth=0`` skips smoothing, which is measurably the wrong choice — see
-    the module docstring — but is left reachable so the difference stays testable.
+    ``t_smooth=0`` skips smoothing (measurably worse, see the module docstring;
+    kept reachable so the difference stays testable). ``cap=True`` and
+    ``align=False`` for the ρ codec; ``align=True`` is worth 5-7% for a position
+    basis.
 
-    ``cap=True`` for the ρ codec, which needs a closed surface. ``align`` is worth
-    5-7% for a position basis and is **pure cost for ρ**, which is exactly
-    rotation-invariant on a shared template (measured 4e-15) — so pass
-    ``align=False`` there.
+    ``base="icosphere"`` resamples every head onto a uniform icosphere at
+    ``subdiv`` and returns ``(X, F, sphere)`` instead. The correspondence is the
+    sphere map of the mean head, :func:`shapegen.codec.base_sphere` (the Laplace
+    eigenbasis sphere, :func:`shapegen.geom.eigen_sphere.conformal_sphere`),
+    computed once and then only sampled at uniform directions. That map is far
+    from area-uniform (vertex-area spread ~2e7 on the remeshed mean head), and the
+    ρ projection weights by sphere vertex areas, so the uniform resample is what
+    makes the template usable: its base-sphere residual is 0.002 at subdiv 6,
+    against 7.1 for the mean head's own sphere. ``remesh`` (a
+    :func:`isotropic_remesh` target, 0.8 in the scripts) remeshes the mean head
+    before building its sphere, and the two transfers are composed so every head
+    still lands on one icosphere. Measured on 6 heads, the eigen sphere builds
+    9x faster than the cMCF it replaced (3.7 s vs 34.7 s) at equal resampling
+    fidelity (chamfer vs original 0.01847 vs 0.01851 whole-head, 0.00943 vs
+    0.00947 face). ``base="native"`` (the default) keeps the source connectivity
+    and leaves the caller to build a sphere.
 
     .. warning::
 
-       **This function moves the reconstruction target.** Both ``remesh`` and
-       ``base="icosphere"`` return a *resampled* mesh, and a coarser setting
-       returns one further from the original input (chamfer against the source
-       head, 6 heads: 0.0169 at ``remesh=0.4``, 0.0173 at 0.8, 0.0233 at 2.5).
-       Scoring a decode against that output therefore grades coarser settings on a
-       softer reference, and will report improvements that are not real — it did,
-       three times, by 25-32%. **Compare against the original input with a
-       topology-free metric** (:func:`~shapegen.eval.metrics.chamfer`), never
-       against what this function returned.
+       **This function moves the reconstruction target.** ``remesh`` and
+       ``base="icosphere"`` return a *resampled* head, and a coarser setting
+       returns one further from the input (a 2.5% remesh sits ~35% further from
+       the source head than 0.8%). Scoring a decode against that output grades
+       coarser settings on a softer reference and reports gains that are not
+       real. **Score against the ORIGINAL head with a topology-free metric**
+       (:func:`~shapegen.eval.metrics.chamfer`), never against what this
+       function returned.
 
-       **And score the face separately.** Most of these 26321 vertices are bald
-       cranium and neck, so a whole-head mean moves for reasons unrelated to the
-       face: 2.5% -> 0.8% is worth 8% whole-head and **0%** on the face. Use
+       **And score the face separately.** A whole-head mean is dominated by
+       cranium and neck and moves for reasons unrelated to the face. Report
        :func:`~shapegen.eval.metrics.chamfer_region` about
        :func:`~shapegen.eval.metrics.nose_tip` alongside the whole-head number.
-
-    ``base="icosphere"`` resamples every mesh onto a uniform icosphere at
-    ``subdiv``, returning ``(X, F, sphere)`` instead of ``(X, F)``. The cMCF sphere
-    of the mean shape is computed once as the correspondence and then discarded,
-    so the parameterisation is unchanged — only the sampling. Worth ~27% of
-    reconstruction error, because two stages of the codec divide by sphere
-    triangle areas that otherwise span 1e6x. ``base="native"`` (the default) keeps
-    the source connectivity and leaves the caller to build a sphere.
     """
     meshes = load_heads(roots, expressions=expressions, limit=limit, cap=cap,
                         verbose=verbose)
@@ -298,30 +273,24 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-4,
     mean = X.mean(0)
 
     if remesh is None:
-        # icosphere directions -> the mean head's own cMCF sphere -> the heads
+        # icosphere directions -> the mean head's sphere map -> the heads
         S = codec.base_sphere(Mesh(mean, F))
         idx, bary, nf = locate_on_sphere(S, F, P)
         Xr = np.stack([(x[F[idx]] * bary[:, :, None]).sum(1) for x in X])
     else:
-        # Remesh first, for a better-conditioned cMCF and a more conformal map,
-        # then compose the two transfers so every head still lands on ONE
-        # icosphere. Remeshing alone would break the shared topology the codes
-        # depend on; composing restores it.
-        # target_pct is a % of the bbox diagonal, which for a head is ~404 mm --
-        # so 2.5 means 10 mm edges and reduces the mean to ~1807 vertices, wider
-        # than a nostril and coarser than anything the icosphere can then recover.
-        # 0.8 (~16900 verts) is the measured operating point.
+        # Remesh the mean head, build its sphere map, then compose the two
+        # transfers so every head still lands on ONE icosphere: remeshing alone
+        # would break the shared topology the codes depend on.
         M, FM = isotropic_remesh(mean, F, target_pct=remesh)
         iW, W, dmax = locate_on_mesh(mean, F, M)    # M's vertices, back onto F
-        S = codec.base_sphere(Mesh(M, FM))          # cMCF of the REMESHED mean
+        S = codec.base_sphere(Mesh(M, FM))          # sphere of the REMESHED mean
         iV, V, nf = locate_on_sphere(S, FM, P)      # icosphere dirs, onto M
         if verbose:
             print(f"remeshed mean {len(mean)} -> {len(M)} verts "
                   f"(target {remesh}%), transfer error {dmax:.2e}", flush=True)
-        # Compose: direction -> 3 verts of M -> 9 verts of F, weights multiplied.
-        # direction j -> 3 verts of M (weights V) -> each of those -> 3 verts of
-        # F (weights W). Nine source vertices per direction, weights multiplied.
-        # They still sum to 1: sum_a V[j,a] * sum_k W[.,k] = sum_a V[j,a] = 1.
+        # Compose: direction j -> 3 verts of M (weights V) -> each -> 3 verts of
+        # F (weights W). Nine source vertices per direction, weights multiplied;
+        # they still sum to 1: sum_a V[j,a] * sum_k W[.,k] = sum_a V[j,a] = 1.
         tri = FM[iV]                                # (m,3) vertex ids in M
         f9 = F[iW[tri]]                             # (m,3,3) vertex ids in F
         w9 = V[:, :, None] * W[tri]                 # (m,3,3)

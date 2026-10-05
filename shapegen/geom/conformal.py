@@ -1,24 +1,14 @@
-"""Spherical conformal parameterisation + Möbius gauge fix.
+"""Conformal-map utilities on the sphere: the Möbius gauge fix and the
+edge-length conformal factor.
 
-Produces the base sphere the ρ codec decodes from: a bijective embedding of a
-genus-0 mesh onto S², on the mesh's own connectivity, with the ℓ=1 Möbius
-freedom removed.
+* :func:`mobius_normalize` drives the conformal (source-area-weighted)
+  barycenter of a sphere parameterisation to the origin via ball automorphisms,
+  killing the 3-parameter Möbius boost freedom and leaving only rotation.
+* :func:`u_edge_lsq` fits the log conformal factor of a sphere → surface map
+  from edge lengths.
 
-  1. :func:`spherical_conformal_map` — conformalized mean-curvature flow (cMCF,
-     Kazhdan–Solomon–Ben-Chen): the *original* cotan Laplacian ``L0`` is held
-     fixed while the mass ``M`` evolves, flowing any genus-0 mesh to a round
-     sphere with low quasi-conformal distortion.
-  2. :func:`mobius_normalize` — drive the conformal (area-weighted) barycenter of
-     the sphere parameterisation to the origin via ball-automorphism inversions.
-     This is the Möbius-registration centering: it kills the 3-dimensional
-     Möbius "boost" freedom, leaving only rotation. (Scale is fixed by the unit
-     sphere projection; **rotation is not fixed by anything**, and that gauge is
-     still open.)
-
-``scripts/willmore_flow.py`` offers an alternative to step 1 via the spin
-transform, with slightly lower quasi-conformal distortion on a bottle (0.017 vs
-0.019). It is not wired into :func:`~shapegen.codec.base_sphere`: qc does not
-predict reconstruction accuracy, so that gap buys nothing.
+The map itself is :func:`shapegen.geom.eigen_sphere.conformal_sphere` (it
+replaced conformalized mean-curvature flow on 2026-09-27).
 """
 
 from __future__ import annotations
@@ -28,44 +18,15 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
 from .mesh import Mesh
-from .operators import cotan_laplacian, vertex_areas, vertex_normals
+from .operators import vertex_areas
 
-__all__ = ["spherical_conformal_map", "mobius_normalize", "ball_automorphism",
-           "u_edge_lsq", "harmonic_energy", "guyau"]
+__all__ = [ "mobius_normalize", "ball_automorphism",
+           "u_edge_lsq"]
 
 
 # --------------------------------------------------------------------------- #
 # Conformalized mean-curvature flow (mesh -> sphere)
 # --------------------------------------------------------------------------- #
-
-def spherical_conformal_map(mesh: Mesh, dt: float = 5e-2, iters: int = 200,
-                            tol: float = 1e-6) -> np.ndarray:
-    """Flow ``mesh`` to the unit sphere by cMCF and return the sphere vertex
-    positions (unit vectors, same connectivity).
-
-    Backward Euler ``(M_k + dt·L0) f_{k+1} = M_k f_k`` with ``L0`` the *fixed*
-    original cotan stiffness and ``M_k`` the evolving lumped mass; recentre and
-    rescale each step. Converges (after projection) to a conformal sphere param.
-    """
-    V = mesh.vertices.astype(np.float64).copy()
-    F = mesh.faces
-    L0, _ = cotan_laplacian(V, F)
-    L0 = L0.tocsc()
-    for _ in range(iters):
-        _, Mk = cotan_laplacian(V, F)
-        A = (Mk + dt * L0).tocsc()
-        solve = spla.factorized(A)
-        rhs = Mk @ V
-        Vn = np.stack([solve(rhs[:, c]) for c in range(3)], axis=1)
-        Vn -= Vn.mean(0)
-        radii = np.linalg.norm(Vn, axis=1)
-        Vn /= max(radii.mean(), 1e-12)
-        if np.max(np.abs(Vn - V)) < tol:
-            V = Vn
-            break
-        V = Vn
-    return V / np.maximum(np.linalg.norm(V, axis=1, keepdims=True), 1e-12)
-
 
 # --------------------------------------------------------------------------- #
 # Ball automorphisms + Möbius normalization
@@ -151,77 +112,3 @@ def u_edge_lsq(S: np.ndarray, B: np.ndarray, E: np.ndarray):
     return out[0], float(out[3])
 
 
-def harmonic_energy(P: np.ndarray, L) -> float:
-    """Dirichlet energy ``½ tr(Pᵀ L P)`` of a sphere map, under the *source* cotan
-    Laplacian. The harmonic map minimises it; a collapsed map drives it to zero,
-    which is the failure mode :func:`guyau` guards against."""
-    return float(0.5 * np.einsum("ij,ij->", P, L @ P))
-
-
-def guyau(mesh: Mesh, sph: np.ndarray, iters: int = 2000, omega: float = 0.5,
-          recenter_every: int = 10, tol: float = 1e-13, verbose: bool = False):
-    """Gu–Yau relaxation: polish a cMCF sphere into the true harmonic map.
-
-    Ported from ``rho_codec_pkg`` (rt/param/cmcf.py). cMCF lands *near* the
-    conformal map; this converges to it. The local update
-
-        φ_i ← normalise( Σ_j w_ij φ_j / Σ_j w_ij )
-
-    minimises Dirichlet energy over ``φ_i`` on S², and Möbius re-centring against
-    the *source* measure keeps the flow off the constant map — otherwise the
-    global minimiser.
-
-    Measured on bottles: quasi-conformal distortion improves ~22%, 0.0194 → 0.0149
-    at subdiv 3 and 0.0097 → 0.0076 at subdiv 4. Note the energy barely moves
-    (12.5554 → 12.5549) while qc improves a fifth, so **energy is a poor progress
-    signal here** — judge the parameterisation by qc.
-
-    **Two traps, both measured.**
-
-    *Undamped Jacobi overshoots.* This updates every vertex simultaneously;
-    per-vertex minimisation is monotone under Gauss–Seidel, not under Jacobi.
-    At ``omega=1.0`` (the reference's default) it improves for 66 sweeps at subdiv
-    4 and then runs away — unguarded it reached E=340 and qc=0.68, returning a
-    sphere that still *looks* like a sphere and is a ruined parameterisation.
-    ``omega=0.5`` is stable and reaches a better optimum.
-
-    *Do not clamp negative cotan weights.* Obtuse triangles give ``w_ij < 0``
-    (1.67% of edges at subdiv 3, 2.16% at subdiv 4) and clamping them looks like
-    the textbook fix for the overshoot. It is not: clamped, the energy never
-    decreases at all — 0 improving sweeps at either resolution — and guyau becomes
-    a no-op. The negative weights carry real geometry.
-
-    The best-iterate guard is what makes this safe: divergence is silent, so the
-    routine keeps the lowest-energy sphere it saw rather than whatever the last
-    sweep produced.
-
-    Sign convention: ``cotan_laplacian`` returns ``L = D − W`` (PSD), so the
-    off-diagonal block is ``−W``; the ratio in the update cancels the sign.
-    """
-    L, _ = cotan_laplacian(mesh.vertices, mesh.faces)
-    Loff = L - sp.diags(L.diagonal())
-    den = np.asarray(Loff.sum(axis=1)).ravel()
-    den = np.where(np.abs(den) < 1e-300, -1e-300, den)
-
-    unit = lambda P: P / np.linalg.norm(P, axis=1, keepdims=True)
-    P = unit(np.asarray(sph, dtype=float))
-    best = (harmonic_energy(P, L), P.copy())
-    prev = best[0]
-    for it in range(iters):
-        Q = unit((Loff @ P) / den[:, None])
-        P = unit((1.0 - omega) * P + omega * Q)
-        if (it + 1) % recenter_every == 0:
-            P = mobius_normalize(mesh, P)
-        E = harmonic_energy(P, L)
-        if not np.isfinite(E):
-            break
-        if E < best[0]:
-            best = (E, P.copy())
-        if it > 50 and abs(E - prev) < tol * max(1.0, abs(E)):
-            break
-        prev = E
-    P = mobius_normalize(mesh, best[1])
-    if verbose:
-        print(f"  guyau: E {harmonic_energy(unit(np.asarray(sph, float)), L):.6f} "
-              f"-> {best[0]:.6f} in {it + 1} sweeps")
-    return P

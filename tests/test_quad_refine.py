@@ -2,8 +2,8 @@
 *positions* of the Ginzburg-Landau cone set against
 :func:`shapegen.quad.field.area_distortion`.
 
-**Read the module docstring before filing this under PLAN.md §P8.7.** §P8.7
-rejects making cones *emerge* from a point relaxation. Nothing here creates,
+**Read the module docstring before filing this under the rejected relaxation
+experiment**, which made cones *emerge* from a point relaxation. Nothing here creates,
 destroys or re-indexes a cone; the topology comes from GL, unchanged, and the
 tests below assert that it stays unchanged.
 """
@@ -79,10 +79,10 @@ def test_objective_positions_stay_on_the_sphere():
 # --------------------------------------------------------------------------- #
 
 def test_refinement_keeps_the_topology_gl_established():
-    """§P8.7's boundary, as an assertion: the cone *count* and every
+    """The relaxation experiment's boundary, as an assertion: the cone *count* and every
     individual *index* are untouched, so the index sum is +2 by construction
     rather than by luck. This is a position refinement of an already-correct
-    set, which is the thing §P8.7 never tested."""
+    set, which is the thing that experiment never tested."""
     rho = _f1(amp=4.0)
     cones, _C, _m, _p = _gl(rho)
     res = qr.refine_cones(cones, rho, L)
@@ -174,7 +174,7 @@ def test_the_refined_energy_does_not_depend_on_the_frozen_chart():
 
 
 def test_refinement_closes_the_round_sphere_gap_to_the_cube():
-    """§P8.4's third gate, which GL alone misses by 6-11% (see
+    """The cross field's third quality gate, which GL alone misses by 6-11% (see
     ``test_quad_field.py::test_gate_p8_4_round_sphere_is_level_with_the_cube``).
 
     On the round sphere the optimum is the evenly spread cube. Refining the
@@ -211,7 +211,7 @@ def test_refined_cones_still_trace_to_a_closed_quad_mesh():
     A placement that scores better but will not solve or trace is not an
     improvement. Run the refined cones through the whole rest of the chain --
     ``project_cones -> solve_lattice -> quad_grid`` -- and demand what
-    PLAN.md §4 demands of any quad mesh: Euler characteristic 2, coverage
+    the pipeline demands of any quad mesh: Euler characteristic 2, coverage
     1.0, index sum 2. Measured on 28 (case, schedule) pairs at L=12/16 the
     refined set solved and traced every time, with the same ~6000 faces as
     the GL set.

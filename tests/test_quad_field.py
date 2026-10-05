@@ -1,10 +1,9 @@
-"""Acceptance tests for the mesh-free spectral cross field (PLAN.md §P8.3,
-§P8.4): the connection operator and the Ginzburg-Landau anneal, ported from
+"""Acceptance tests for the mesh-free spectral cross field: the connection operator and the Ginzburg-Landau anneal, ported from
 ``03_spectral/solver.py`` and ``gl_spec.py``.
 
 Deliberately not covered here (out of scope for this port, per the module
-docstring): ``blend.py``'s alignment control ``t`` (§P8.6), and anything from
-the mesh-based curvature/umbilic path (§P2/§P3) -- this module never touches a
+docstring): ``blend.py``'s alignment control ``t``, and anything from
+the mesh-based curvature/umbilic path -- this module never touches a
 triangle mesh.
 """
 
@@ -27,7 +26,7 @@ def _connection_from(seed=1, L=L):
     return coeffs, phi, A
 
 
-#: The schedule bank the §P8.4 quality gates average over. A single schedule
+#: The schedule bank the cross-field quality gates average over. A single schedule
 #: cannot carry a quality gate: varying *only* the schedule moves
 #: :func:`~shapegen.quad.field.area_distortion` by 1.08-1.21x per case
 #: (measured over an 8-schedule bank at L=12/16/24), so a bound tight enough
@@ -77,7 +76,7 @@ def _gl_energy_gm(psi0, Cmat, modes, rho, surf, band=L, over=4.0):
 # --------------------------------------------------------------------------- #
 
 def test_real_to_complex_matches_real_sh_basis():
-    """The conversion pair (§2.3/§P8.1), checked against a direct
+    """The conversion pair, checked against a direct
     ``real_sh_basis`` synthesis rather than re-derived by eye."""
     from shapegen.spectral.grids import gl_grid
 
@@ -195,7 +194,7 @@ def test_linear_start_rescales_by_sqrt_of_peak_modulus():
 
 
 # --------------------------------------------------------------------------- #
-# The epsilon schedule (PLAN.md §P8.4's two pitfalls, as guards not comments) #
+# The epsilon schedule (two known pitfalls, as guards not comments)          #
 # --------------------------------------------------------------------------- #
 
 def _cube_cones():
@@ -228,7 +227,7 @@ def test_above_the_epsilon_ceiling_gl_returns_the_linear_start():
     ``linear_start``. Measured overlap 0.9996+ just above the ceiling against
     0.72 just below it, on F1 at L=16.
 
-    This is not "the penalty does nothing" (PLAN.md §P8.4's wording for the
+    This is not "the penalty does nothing" (the earlier description of the
     same regime). It is strictly worse: the anneal is *replaced* by the
     linear eigenproblem it was supposed to beat.
     """
@@ -277,7 +276,7 @@ def test_anneal_schedule_clamps_where_the_ceiling_crosses_the_schedule():
 
 
 def test_epsilon_must_scale_to_the_field_not_the_readout_grid():
-    """**PLAN.md §P8.4's "pitfall that cost the most", as a test.**
+    """**The "pitfall that cost the most", as a test.**
 
     ``epsilon`` scales to the field's own resolution ``pi/L``, not to the
     ``over``-times-finer grid ``cones_from_field`` reads zeros off. Dividing
@@ -312,7 +311,7 @@ def test_epsilon_must_scale_to_the_field_not_the_readout_grid():
 
 
 def test_epsilon_must_not_be_driven_to_zero():
-    """**PLAN.md §P8.4's second pitfall, as a test.** Once the vortex core is
+    """**The second pitfall, as a test.** Once the vortex core is
     narrower than the field's own resolution the solution degrades, so the
     schedule is bounded below as well as above. One level, L=16, F1, measured
     across ``eps/(pi/L)``: 1.0 -> 0.0824, 0.5 -> 0.0815, 0.4 -> 0.1131,
@@ -337,11 +336,11 @@ def test_epsilon_must_not_be_driven_to_zero():
 
 
 # --------------------------------------------------------------------------- #
-# §P8.4's own gates                                                           #
+# The cross field's quality gates                                            #
 # --------------------------------------------------------------------------- #
 
 def test_gate_p8_4_index_sum_is_two_to_1e_10():
-    """The gate as PLAN.md states it: index sum 2 to 1e-10. Checked on both
+    """The gate: index sum 2 to 1e-10. Checked on both
     the degenerate (round sphere) and the generic (F1) case, because the two
     reach 8 cones by different routes."""
     for coeffs in (np.zeros(n_coeffs(L)), _connection_from(seed=1)[0]):
@@ -355,8 +354,8 @@ def test_gate_p8_4_index_sum_is_two_to_1e_10():
 
 
 def test_gate_p8_4_gl_beats_the_linear_eigenproblem_by_more_than_2x():
-    """PLAN.md §P8.4: "GL beats the linear eigenproblem on area-distortion
-    energy by > 2x (bundle: 3.15x)".
+    """GL beats the linear eigenproblem on area-distortion energy by > 2x
+    (bundle: 3.15x).
 
     **Scored as a geometric mean over three schedules, not one draw** (see
     :data:`_GATE_SCHEDULES`). Measured at L=16 amplitude 1: ``e_lin``
@@ -405,8 +404,8 @@ def test_gate_p8_4_gl_beats_the_linear_eigenproblem_by_more_than_2x():
 
 
 def test_gate_p8_4_round_sphere_is_level_with_the_cube():
-    """PLAN.md §P8.4's third gate: "on a round sphere it scores at least as
-    well as an evenly spread cube" -- the one 8-cone placement whose optimum
+    """The third gate: on a round sphere it scores at least as
+    well as an evenly spread cube -- the one 8-cone placement whose optimum
     is known independently.
 
     **Measured, GL alone does not quite reach it, and the shortfall is
@@ -673,7 +672,7 @@ def test_area_distortion_matches_the_mesh_the_cones_actually_produce():
                            cell_sizes=tuple(tgt * 0.92 ** k for k in range(30)))
     assert sol["cones"] is not None
     g = qg.quad_grid(sol["cones"], ch["idx"], sol["cell"])
-    P3, _info = ql.lift_route1(g.points @ ch["Rm"], coeffs, subdiv=5)
+    P3, _info = ql.lift_spectral(g.points @ ch["Rm"], coeffs, L)
 
     areas = []
     for f in g.faces:
@@ -689,7 +688,7 @@ def test_area_distortion_matches_the_mesh_the_cones_actually_produce():
 
 
 def test_production_amplitude_is_far_above_the_fixtures():
-    """The calibration that reframed §P9. Every quality number in this repo
+    """The calibration that reframed the spectral solve. Every quality number in this repo
     before 2026-09-21 was taken at ``rms(rho) <= 0.61``; real FaceScape codes
     measure 1.87-1.93. The linearisation was only ever judged 3-12x below the
     amplitude it ships at -- i.e. in the one regime where it is valid."""

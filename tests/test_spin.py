@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 
 from shapegen.data.dataset import demo_bottle_meshes
-from shapegen.geom import conformal as cf, dirac, spin
+from shapegen import codec
+from shapegen.geom import dirac, spin
 from shapegen.geom.mesh import icosphere
 
 
@@ -123,7 +124,7 @@ def test_lambda_recovery_converges():
 def test_dirac_residual_converges_on_real_meshes():
     """The gate the old operator failed.
 
-    For a bottle's cMCF parameterization the residual must fall with refinement
+    For a bottle's conformal parameterization the residual must fall with refinement
     (it is bounded by the map's quasi-conformal distortion, which halves per
     subdivision). The old mass-coupled operator sat at ~0.93 at every level.
     """
@@ -131,7 +132,7 @@ def test_dirac_residual_converges_on_real_meshes():
     for sub in (2, 3):
         mesh = demo_bottle_meshes(n=1, subdiv=sub, seed=0)[0]
         F = mesh.faces
-        sph = cf.mobius_normalize(mesh, cf.spherical_conformal_map(mesh, iters=300))
+        sph = codec.base_sphere(mesh)
         lam = spin.lambda_from_correspondence(sph, mesh.vertices, F)
         rho = dirac.rho_from_lambda(sph, F, lam)
         res = dirac.dirac_residual(sph, F, lam, rho)

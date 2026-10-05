@@ -11,9 +11,7 @@ import numpy as np
 import pytest
 
 from shapegen.geom import dirac
-from shapegen.geom.curvature import mean_curvature
 from shapegen.geom.mesh import icosphere
-from shapegen.geom.operators import vertex_areas
 
 
 # --------------------------------------------------------------------------- #

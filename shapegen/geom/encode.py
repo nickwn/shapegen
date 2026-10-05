@@ -1,60 +1,25 @@
-"""The ρ encoder: ``mesh → ρ̂``, band-limited spherical-harmonic coefficients.
+"""Spherical-harmonic primitives shared by the encoders: the real SH basis, a
+mass-weighted projection, the Procrustes shape loss, and the per-band
+preconditioner.
 
-This is the inverse of the decode in :mod:`shapegen.geom.dirac`, and it is built
-by *optimisation* rather than by a local formula. The local encoder
-(:func:`~shapegen.geom.spin.mesh_to_rho_direct`, ``ρ = H e^u − 1``) minimises a
-Dirac-consistency residual, which is not the quantity anyone reports.
-Minimising decoded *shape error* directly, through
-:func:`~shapegen.geom.dirac_adjoint.decode_adjoint`, closes roughly half the gap
-they leave: measured on a bottle, 0.1095 → 0.0569.
+Two traps the optimiser in :func:`shapegen.geom.spectral_adjoint.encode_spectral`
+inherits, both silent:
 
-Encoding happens **in coefficient space at the target bandwidth**, not in vertex
-space followed by a projection. That matters: an encoder that knows it will be
-truncated to ``L`` spends its budget differently from one that is truncated
-afterwards, and the difference grows as ``L`` falls.
-
-The objective is the Procrustes-aligned squared shape error, which is invariant
-under rotation, translation *and* scale. That is not a convenience — it is
-exactly the gauge-invariance :func:`stage_a_adjoint` requires of a loss, since
-the decode only determines the immersion up to a similarity. By the envelope
-theorem the alignment is held fixed when differentiating, so the SVD inside
-:func:`procrustes` is never differentiated through.
-
-**Two traps, both measured, both silent.**
-
-*Optimiser tolerances.* ``J`` is a normalised squared error — about 3e-5 at a
-0.6% shape error — so its gradient is numerically tiny. L-BFGS-B's default
-``pgtol`` of 1e-5 is already satisfied at the starting point and it returns with
-``nit=0``, having taken no step, which is indistinguishable from convergence
-unless the iteration count is inspected. :func:`encode_sh` pins both tolerances
-far below the scale of the problem and reports ``niter`` and ``gnorm`` so this
-cannot hide.
-
-*Warm starts across bandwidths.* Seeding band ``L`` with the solution at ``L−1``
-is tempting, and before :func:`band_precond` existed it was actively dangerous: a
-band that stalled handed its bad basin to every band after it, and a warm chain
-sat at 0.0944 for L=4…10 where a cold start at L=10 reached 0.0065. Note the
-starting objective does *not* predict this — the stalled point has the **lower**
-``J`` — so no cheap heuristic picks the right start.
-
-Preconditioning removed the stall at its source. Measured afterwards across
-L=2…24, warm and cold reach the same optimum to 0.00% wherever the optimiser
-converges, and cost the same in total (800 iterations either way; warm is ~2.7×
-*worse* below L≈8 and ~20% better above it, and the two cancel). So sweeps just
-encode each band independently from its own projection. Warm starting is not
-wrong here, it is simply not worth the code.
+* **Tolerances.** The Procrustes ``J`` is a normalised squared error (~3e-5 at
+  a 0.6% shape error), so L-BFGS-B's default ``pgtol`` of 1e-5 is met at the
+  start and it returns ``nit=0`` having taken no step. Pin ``ftol``/``gtol``
+  far below the problem's scale and check ``niter``.
+* **Warm starts across bandwidths** are not worth it: with :func:`band_precond`
+  a cold start per band reaches the same optimum at the same total cost.
 """
 
 from __future__ import annotations
 
 import numpy as np
-from scipy.optimize import minimize
 
-from . import dirac, dirac_adjoint as da
-from . import spin
 
 __all__ = ["real_sh_basis", "n_coeffs", "band_index", "procrustes",
-           "band_precond", "encode_sh", "decode_sh", "sh_project"]
+           "band_precond", "sh_project"]
 
 
 def n_coeffs(L: int) -> int:
@@ -76,80 +41,51 @@ def real_sh_basis(V: np.ndarray, L: int) -> np.ndarray:
 
     ``V`` need not be normalised; only the direction is used.
     """
-    from scipy.special import sph_harm_y
-    # Only the direction matters, so divide out the radius rather than assuming
-    # the caller normalised: `sph` comes from cMCF and is unit only up to the
-    # flow's own tolerance.  The clip guards acos against |z/r| = 1 + 1e-16.
+    # Divide out the radius rather than trusting the caller to normalise; the
+    # clip guards acos against |z/r| = 1 + 1e-16.
+    from math import sqrt
+
+    from ..spectral.swsh import wigner_d_ladder
+
     r = np.linalg.norm(V, axis=1)
     theta = np.arccos(np.clip(V[:, 2] / r, -1.0, 1.0))
     phi = np.arctan2(V[:, 1], V[:, 0])
-
-    # Real orthonormal SH from the complex ones.  For m > 0 the real and
-    # imaginary parts of Y_l^m give the cos(m phi) and sin(m phi) pair; the
-    # sqrt(2) restores unit norm after taking one of the two, and the (-1)^m
-    # cancels the Condon-Shortley phase that scipy carries so that the resulting
-    # basis is the standard real one.  (The exact phase convention is immaterial
-    # here -- we only ever fit and re-synthesise in the *same* basis -- but
-    # matching the standard keeps the coefficients comparable to other tools.)
-    root2 = np.sqrt(2.0)
-
-    # The complex harmonics come from the spin-0 SWSH basis, not from a
-    # per-(l,m) scipy call. Both give the same numbers -- `sph_harm_y` is the
-    # oracle `swsh` is tested against at spin 0 -- but `eval_basis` walks the
-    # whole l ladder per m in one stable recurrence (PLAN.md §P8.1) instead of
-    # evaluating (L+1)^2 harmonics independently. Measured on the 40962-vertex
-    # ico6 sphere at L=32, the sphere and band this project actually uses:
-    # **43.9s -> 1.1s**. That cost was a third of the runtime of a single-face
-    # quad-mesh build, and it is paid again for every new sphere.
-    from ..spectral.swsh import eval_basis, mode_list
-
-    Yc = eval_basis(0, L, theta, phi)
-    col_of = {lm: i for i, lm in enumerate(mode_list(0, L))}
-    out = np.empty((theta.size, (L + 1) ** 2))
-    # Column order is load-bearing: degree ascending, m from -l to +l, so the
-    # first (L'+1)^2 columns form the bandwidth-L' basis and callers can slice
-    # instead of rebuilding.
-    k = 0
-    for l in range(L + 1):
-        for m in range(-l, l + 1):
-            if m == 0:
-                # m = 0 is already real; no sqrt(2), no phase.
-                out[:, k] = Yc[:, col_of[(l, 0)]].real
-            elif m > 0:
-                out[:, k] = root2 * (-1) ** m * Yc[:, col_of[(l, m)]].real
-            else:
-                # the sin partner comes from the imaginary part of the
-                # *positive*-order harmonic
-                out[:, k] = root2 * (-1) ** m * Yc[:, col_of[(l, -m)]].imag
-            k += 1
-    return out
+    # Separable: Y_lm = c·N_l·d^l_{m0}(θ)·{cos, sin}(|m|φ), with c = √2·(−1)^m for
+    # m ≠ 0 (unit norm, Condon-Shortley phase cancelled) -- the standard real basis,
+    # equal to the complex route (√2·(−1)^m Re/Im Y_l^|m|) to 1e-15. One Wigner-d
+    # ladder per m; 0.19 s at L=79 on 10242 points against 1.5 s through the
+    # complex basis. Built transposed so every write is a contiguous row, and
+    # returned as that array's transpose (Fortran order, which BLAS takes as is).
+    out = np.empty(((L + 1) ** 2, theta.size))
+    for m in range(L + 1):
+        ls, d = wigner_d_ladder(L, m, 0, theta)
+        l = ls.astype(int)
+        N = np.sqrt((2 * l + 1) / (4 * np.pi))[:, None]
+        if m == 0:
+            out[l * l + l] = N * d
+        else:
+            A = (sqrt(2.0) * (-1) ** m) * N * d
+            out[l * l + l + m] = A * np.cos(m * phi)      # column order is load-bearing:
+            out[l * l + l - m] = A * np.sin(m * phi)      # callers slice to smaller bands
+    return out.T
 
 
 def sh_project(rho: np.ndarray, Y: np.ndarray, mass: np.ndarray | None = None):
     """SH coefficients of a per-vertex field on the sphere.
 
     With ``mass`` (the sphere's lumped vertex areas) this is a **Galerkin
-    projection in the mesh's own L²** — ported from ``rho_codec_pkg``'s
-    ``MeshBand``::
+    projection in the mesh's own L²**::
 
         f_L = argmin_g  Σ_i M_i (f_i − g_i)²  =  Y (YᵀMY)⁻¹ YᵀM f
 
-    Without it, plain unweighted least squares, which is what shapegen used to do
-    and is **wrong on a cMCF sphere**: vertex density there spans 8.7x at subdiv 3
-    and 11.1x at subdiv 4, so an unweighted fit silently weights the sphere by
-    triangulation rather than by area. Measured on a bottle at subdiv 4, weighting
-    is worth **3.9x at L=8** and helps most exactly where the codec is weakest.
+    Without it, plain unweighted least squares. Trap: on a non-uniform sphere
+    an unweighted fit weights by triangulation density rather than area
+    (measured 3.9x worse at L=8 on a bottle).
 
-    Do **not** replace this with quadrature on a Gauss-Legendre grid, which is the
-    obvious "more correct" move and is a dead end — tried in both repos, rejected
-    in both. ρ on a bottle concentrates on a cap of angular radius ~0.03 rad while
-    an affordable GL grid (L_quad=72) has 0.043 rad spacing, so the grid cannot
-    resolve ρ at all; ‖ρ‖ measured through it swings 3.64/6.74/5.88/4.67 for
-    L_quad=24/36/48/72 against a mesh truth of 5.90. The conformal mesh grades
-    itself to the geometry — smallest face 0.0014 rad — which is precisely why the
-    mesh's own quadrature is the right one. Galerkin is also insensitive to the
-    Gram error: it is the exact weighted-L² projection whether or not the
-    quadrature is orthonormal.
+    Trap: do not replace this with Gauss-Legendre quadrature. ρ concentrates
+    on caps (~0.03 rad) finer than an affordable GL grid (0.043 rad at
+    L_quad=72), and ‖ρ‖ through such grids swings 3.6-6.7 against a mesh
+    truth of 5.9; the conformal mesh grades itself to the geometry.
     """
     if mass is None:
         # rcond=None keeps numpy's future-proof default (machine-eps cutoff).
@@ -177,19 +113,10 @@ def band_precond(L: int, alpha: float = 0.75) -> np.ndarray:
     — *not* the ``^-2`` the linearisation alone suggests — and equalising it
     wants ``d ∝ [ℓ(ℓ+1)]^{0.75}``, hence the default.
 
-    Measured, cold start, bottle at n=2562, L=40, 220 function evaluations::
-
-        alpha=0     (plain)      final error 0.0045
-        alpha=0.75               final error 0.0019, and reaches 0.0045 in 26
-
-    an 8.5x reduction in work for the same answer. The optimum in ``alpha`` is
-    flat over 0.5-0.75 and reproduces across meshes; above ~0.875 it degrades
-    again.
-
-    A *probed* per-band Jacobi preconditioner was tried and rejected: it beat
-    this at L=12 but lost to no preconditioning at all at L=16, because one
-    representative coefficient stops describing a band as the m-multiplicity
-    grows, and probing every coefficient costs more than it saves.
+    Measured (bottle, L=40, cold start): alpha=0.75 reaches alpha=0's final
+    error in 8.5x fewer evaluations. The optimum is flat over 0.5-0.75 and
+    degrades above ~0.875. (A probed per-band Jacobi preconditioner lost to
+    no preconditioning at L=16.)
     """
     b = band_index(L)
     # Clamp l(l+1) at 2 so degrees 0 and 1 share degree 1's scale instead of
@@ -244,7 +171,7 @@ def procrustes(target: np.ndarray, X: np.ndarray):
 
     # Normalise by ||A||^2 so J is scale-free and comparable across meshes; it
     # also puts J on a fixed numeric scale (~1e-5 at a 0.6% error), which is
-    # exactly why encode_sh has to override L-BFGS's default tolerances.
+    # why the encoders override L-BFGS's default tolerances.
     c = float((A * A).sum())
     E = A - s * BR
     J = float((E * E).sum() / c)
@@ -260,182 +187,3 @@ def procrustes(target: np.ndarray, X: np.ndarray):
     # gradient with a spurious constant mode.
     return J, dB - dB.mean(0)
 
-
-# --------------------------------------------------------------------------- #
-# Encode / decode                                                             #
-# --------------------------------------------------------------------------- #
-
-def decode_sh(coeffs: np.ndarray, sph: np.ndarray, F: np.ndarray,
-              Y: np.ndarray | None = None, L: int | None = None):
-    """``ρ̂ → mesh``. Synthesise ρ on the base sphere and run the spin transform.
-
-    The exact inverse of :func:`encode_sh`, and the function that makes the
-    round trip a round trip: whatever ``encode_sh`` reports as its error is what
-    you get back through here (pinned by
-    ``tests/test_encode.py::test_decode_sh_inverts_encode_sh``).
-    """
-    if Y is None:
-        # No basis supplied: rebuild one. L is recoverable from the coefficient
-        # count since K = (L+1)^2, so an explicit L is only needed when passing a
-        # coefficient vector shorter than its own bandwidth.
-        Y = real_sh_basis(sph, L if L is not None else
-                          int(round(np.sqrt(len(coeffs)))) - 1)
-    # Slice rather than require an exactly-sized basis, so a single large Y can
-    # serve every bandwidth in a sweep.
-    rho = Y[:, :len(coeffs)] @ coeffs
-    # Stage A: the Dirac eigensolve. gamma (discarded here) is the squared Dirac
-    # residual -- worth capturing if you want to know how realisable this rho is.
-    lam, _ = dirac.spin_transform(sph, F, rho)
-    # Stages B and C: the CPS edge rule, then the cotan-Poisson integration.
-    # Result is mean-centred; it is defined only up to a similarity, which is
-    # exactly why the error metric has to be Procrustes-aligned.
-    return dirac.integrate_edges(sph, F, lam)
-
-
-def encode_sh(mesh, L: int, sph=None, Y=None, c0=None, maxiter: int = 60,
-              rho0=None, cmcf_iters: int = 300, verbose: bool = False,
-              alpha: float = 0.75, maxcor: int = 40, precond=None,
-              optimise: bool = True, residual: int = 0):
-    """Encode ``mesh`` as ``(L+1)²`` real SH coefficients of ρ.
-
-    ``sph`` is the cMCF sphere parameterisation (computed if absent — it is the
-    expensive step, so pass it when sweeping ``L``). ``Y`` is a basis of at least
-    ``(L+1)²`` columns. ``c0`` overrides the default initialiser (the direct
-    encoder projected to this bandwidth), which is a poor answer but a good
-    starting point — measured ``‖ρ_opt − ρ₀‖/‖ρ₀‖ = 0.19``.
-
-    Returns a dict with ``coeffs``, ``rho``, ``sph``, ``err`` (the *relative
-    Procrustes error*, √J), ``err0`` for the initialiser, and ``nfev``.
-    """
-    F = mesh.faces
-    target = mesh.vertices
-
-    # The base sphere. Every stage below lives on *this* geometry with the
-    # mesh's own connectivity, so vertex i of sph corresponds to vertex i of the
-    # target -- that correspondence is what makes a per-vertex shape error
-    # meaningful at all. cMCF is by far the most expensive step here, hence the
-    # option to pass it in when sweeping bandwidths.
-    if sph is None:
-        from . import conformal as cf
-        sph = cf.mobius_normalize(mesh, cf.spherical_conformal_map(
-            mesh, iters=cmcf_iters))
-    if Y is None:
-        Y = real_sh_basis(sph, L)
-    Yl = Y[:, :n_coeffs(L)]          # accept an over-wide basis and slice
-
-    # Initialiser. The local encoder is a poor *answer* (it minimises Dirac
-    # consistency, not shape error) but a good *starting point*: measured
-    # ||rho_opt - rho_0||/||rho_0|| = 0.19.
-    if c0 is None:
-        if rho0 is None:
-            rho0 = spin.mesh_to_rho_direct(mesh, sph)
-        # Galerkin in the sphere's own L2 -- see sh_project. Unweighted least
-        # squares here costs ~3.9x at low L on a cMCF sphere.
-        from .operators import vertex_areas  # noqa: PLC0415
-        c0 = sh_project(rho0, Yl, mass=vertex_areas(sph, F))
-    c0 = np.asarray(c0, dtype=float)
-
-    if residual:
-        # Re-measure after decoding, and add what is still missing.
-        #
-        # The single-shot coefficients above are a band-limited measurement of the
-        # INPUT, so their high bands carry the high-frequency part of that
-        # measurement -- estimator error included -- which is why `direct` stops
-        # improving with bandwidth and then degrades. Decoding and re-measuring
-        # asks a different question: given what the decode already reproduces,
-        # what is left? That residual sees the decode's own distortion, which no
-        # measurement of the input can.
-        #
-        # Measured (3 heads, remesh 2.5%, icosphere subdiv 6, chamfer against the
-        # ORIGINAL head): it removes the turn-up. Single-shot peaks at L=24 and
-        # degrades at L=32 (0.02555 -> 0.02630); with one pass L=32 becomes the
-        # best point at 0.02411, beating every single-shot configuration.
-        #
-        # ONE pass is the whole method. A second and third change nothing
-        # (0.02411 -> 0.02414 -> 0.02413), and staging the bands coarse-to-fine is
-        # worse than one full-bandwidth pass. Cost is one extra decode.
-        #
-        # Note gamma RISES here (1.2e-2 -> 1.4e-2 at L=32) while the error falls,
-        # so the "bandwidth pays until gamma ~ 1e-2" rule applies to single-shot
-        # encoders only.
-        from ..geom.mesh import Mesh  # noqa: PLC0415
-        from .operators import vertex_areas  # noqa: PLC0415
-        mass = vertex_areas(sph, F)
-        for _ in range(residual):
-            lam, _ = dirac.spin_transform(sph, F, Yl @ c0)
-            Xd = dirac.integrate_edges(sph, F, lam)
-            now = spin.mesh_to_rho_direct(Mesh(Xd, F), sph)
-            c0 = c0 + sh_project(rho0 - now, Yl, mass=mass)
-
-    # Optimise in preconditioned variables u, with c = d * u. Pure change of
-    # variables; see band_precond for why it is worth ~8x.
-    d = band_precond(L, alpha) if precond is None else np.asarray(precond, float)
-
-    seen = {}
-
-    def fg(u):
-        """Objective and gradient at preconditioned coefficients ``u``.
-
-        One call = one decode + one adjoint, which is the unit of cost for the
-        whole encoder (~640 ms at n=2562), so nfev is the honest measure of work.
-        """
-        # u -> c -> rho: two linear maps, both trivially differentiable.
-        rho = Yl @ (d * u)
-        # Forward: rho -> X. The cache carries lambda and gamma so the backward
-        # pass does not repeat the eigensolve.
-        X, cache = da.decode_forward(sph, F, rho)
-        seen["gamma"] = cache["gamma"]      # carried out for the caller
-        # J must be gauge-invariant (rotation AND scale) or the adjoint below is
-        # not valid -- see stage_a_adjoint. Procrustes is exactly that.
-        J, dJdX = procrustes(target, X)
-        # Reverse: dJ/dX -> dJ/drho through the three stage adjoints, then Ylᵀ
-        # for the basis and d for the preconditioner. Both are the adjoints of
-        # the two linear maps at the top of this function, applied in reverse.
-        return J, d * (Yl.T @ da.decode_adjoint(dJdX, cache))
-
-    u0 = c0 / d
-    # Evaluate the start point explicitly: needed both to report err0 and to
-    # guarantee below that we never return something worse than we were given.
-    J0, g0 = fg(u0)
-
-    if not optimise:
-        # The local encoder: report the initialiser as the answer. niter=0 is
-        # honest here rather than a stalled optimiser, and `status` says so, so
-        # the convergence flag downstream does not misread it as budget-limited.
-        return {"coeffs": c0, "rho": Yl @ c0, "sph": sph, "L": L, "alpha": alpha,
-                "err": float(np.sqrt(max(J0, 0.0))),
-                "err0": float(np.sqrt(max(J0, 0.0))),
-                "gamma": float(seen["gamma"]),
-                "nfev": 1, "niter": 0,
-                "gnorm0": float(np.abs(g0 / d).max()),
-                "gnorm": float(np.abs(g0 / d).max()),
-                "status": "LOCAL: geometric measurement, not optimised"}
-    # ``J`` is a *normalised* squared error, so it and its gradient are numerically
-    # tiny (J ~ 3e-5 at a 0.6% shape error). L-BFGS-B's default pgtol of 1e-5 is
-    # then already satisfied at the starting point and it returns with nit=0
-    # without taking a step — a silent no-op that looks exactly like convergence.
-    # Both tolerances are pinned well below the scale of the problem instead.
-    res = minimize(fg, u0, jac=True, method="L-BFGS-B",
-                   options={"maxiter": maxiter, "ftol": 1e-18, "gtol": 1e-14,
-                            "maxcor": maxcor})
-    # L-BFGS can end on a rejected step; keep whichever point is actually better.
-    # Makes encode_sh monotone by construction: it can never return worse than
-    # its initialiser, so a caller sweeping bandwidths cannot go backwards.
-    u, J = (res.x, float(res.fun)) if res.fun < J0 else (u0, J0)
-    # Undo the preconditioner. Forgetting this is the one silent bug this
-    # reparameterisation can cause -- u is a plausible-looking coefficient vector
-    # that decodes to the wrong mesh -- so test_decode_sh_inverts_encode_sh is
-    # parametrised over alpha specifically to catch it.
-    c = d * u
-    # Gradient norms are reported in *coefficient* space, not the preconditioned
-    # space, so they stay comparable across different alpha.
-    gc = (res.jac / d) if res.jac is not None else None
-    fg(u)                                  # refresh gamma at the returned point
-    return {"coeffs": c, "rho": Yl @ c, "sph": sph, "L": L, "alpha": alpha,
-            "err": float(np.sqrt(max(J, 0.0))),
-            "err0": float(np.sqrt(max(J0, 0.0))),
-            "gamma": float(seen["gamma"]),
-            "nfev": int(res.nfev), "niter": int(res.nit),
-            "gnorm0": float(np.abs(g0 / d).max()),
-            "gnorm": float(np.abs(gc).max()) if gc is not None else np.nan,
-            "status": str(res.message)}

@@ -1,4 +1,4 @@
-"""Shared ρ fixtures for the quad-mesh port (PLAN.md §P0/§P1).
+"""Shared ρ fixtures for the quad-mesh port.
 
 Not a pytest file itself — imported by ``test_quad_p0_p1.py`` and by the
 ``test_quad_*.py`` files P2 onward will add, so the fixtures are defined once.
@@ -51,8 +51,8 @@ def bundle_style_coeffs(L: int = 32, lmin: int = 2, power: float = -2.0,
         rho += sqrt2 * (a * Re(Y_lm) - b * Im(Y_lm))       for m = 1..l
 
     using scipy's ``sph_harm_y`` directly — no ``(-1)^m`` Condon-Shortley
-    cancellation. ``real_sh_basis`` *does* carry that cancellation (PLAN.md
-    §2.4's "one conversion pair" warning), so matching the two fields requires,
+    cancellation. ``real_sh_basis`` *does* carry that cancellation (the
+    "one conversion pair" warning), so matching the two fields requires,
     for each ``m = 1..l``::
 
         coeffs[l, 0]  = c0
@@ -97,20 +97,20 @@ def fixture_f1(L: int = 32, seed: int = 1, subdiv: int = 4):
 
 
 def fixture_f2(L: int = 32, subdiv: int = 3, seed: int = 0):
-    """F2 — a real code: ``codec.encode(bottle, L=32, method="residual")``."""
+    """F2 — a real code: ``codec.encode(bottle, L=32, method="spectral")``."""
     from shapegen.codec import encode
     from shapegen.data.dataset import demo_bottle_meshes
 
     mesh = demo_bottle_meshes(n=1, subdiv=subdiv, seed=seed)[0]
-    return encode(mesh, L=L, method="residual")
+    return encode(mesh, L=L, method="spectral")
 
 
 def fixture_f3(roots, L: int = 32, remesh: float = 0.8, t_smooth: float = 1e-4):
     """F3 — the hard case: a FaceScape head, ``γ_mesh ≈ 2.7e-2`` at L=32.
 
     Needs a local FaceScape ``models_reg`` root, so it is not exercised by the
-    automated gate suite. PLAN.md: "ρ is ~99% unrepresentable on scanned
-    faces... Drive development on F1/F2. F3 is a stress test, not a target."
+    automated gate suite. ρ is ~99% unrepresentable on scanned faces, so
+    development is driven on F1/F2; F3 is a stress test, not a target.
     """
     from shapegen.codec import encode
     from shapegen.data.faces import build_dataset
@@ -118,11 +118,11 @@ def fixture_f3(roots, L: int = 32, remesh: float = 0.8, t_smooth: float = 1e-4):
 
     X, F = build_dataset(roots, t_smooth=t_smooth, align=False, cap=True,
                           remesh=remesh, limit=1)
-    return encode(Mesh(X[0], F), L=L, method="residual")
+    return encode(Mesh(X[0], F), L=L, method="spectral")
 
 
 F4_SPECTRA = (-2.0, -1.5, -1.0, -0.5)
-"""F4 — spectra ℓ⁻² … ℓ⁻⁰·⁵ for the umbilic-count sweep (§P8.5)."""
+"""F4 — spectra ℓ⁻² … ℓ⁻⁰·⁵ for the umbilic-count sweep."""
 
 
 def fixture_f4(power: float, L: int = 32, seed: int = 1, subdiv: int = 4):
@@ -147,7 +147,7 @@ PRODUCTION_RMS = 1.90
 
 **Every quality number in this repository before 2026-09-21 was taken at
 ``rms <= 0.61``** -- 3-12x below this. That is not a detail: it is the
-regime where ``mu = 1 + 2rho`` is a valid linearisation, so the whole §P9
+regime where ``mu = 1 + 2rho`` is a valid linearisation, so the whole spectral-solve
 comparison was run where the thing it replaces happens to work. The amplitude
 at which it stops working (``rms ~ 1.22``, F5 below) was never tested.
 """

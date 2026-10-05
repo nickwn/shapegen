@@ -7,18 +7,16 @@ lives here, so swapping the representation is swapping one object.
 Two implementations of the same interface:
 
 ``PCABasis``
-    Positions in a data-adapted basis. For registered data this wins by a wide
-    margin — measured on 200 FaceScape heads (train 160, held-out 40, scored
-    against the smoothed target), **k=32 gives 0.0082** against the ρ codec's
-    0.0209 at L=32, i.e. 2.6x better accuracy from 34x fewer numbers. It needs a
-    solved correspondence, which registered datasets have by construction.
+    Positions in a data-adapted basis. Needs a solved correspondence, which
+    registered datasets have by construction; on 200 FaceScape heads (train 160,
+    held-out 40, scored against the smoothed target) k=32 gives 0.0082.
 
 ``RhoBasis``
     ρ̂, the spin-transform code, via :mod:`shapegen.codec`. Needs no
     correspondence, works on unregistered genus-0 shapes, always decodes to *some*
-    surface, and hands you γ as a free validity score. Less accurate on registered
-    faces than PCA — that is the trade — but it is the path that generalises off a
-    registered dataset, which is what the rest of this repo is for.
+    surface, and hands you γ as a free validity score. The ``direct`` codes
+    training uses are less accurate than PCA on registered faces -- that is the
+    trade -- but it is the path that generalises off a registered dataset.
 
 Both expose ``fit`` / ``encode`` / ``decode`` on **whitened** codes. Whitening is
 not cosmetic: the flow-matching loss is an unweighted MSE in code space, so
@@ -88,23 +86,19 @@ class PCABasis:
 class RhoBasis:
     """ρ̂ codes from :mod:`shapegen.codec`, on one shared template sphere.
 
-    The sphere is fixed at fit time and travels with the basis, because ρ̂ is
-    defined *relative to* a base sphere: decoding against a different
-    parameterisation of the same shape gives a different mesh. At generation time
-    there is no mesh and hence no cMCF sphere to recover, so it must be shared.
+    The sphere is fixed at fit time and travels with the basis: ρ̂ is defined
+    relative to a sphere parameterisation, and at generation time there is no
+    mesh to parameterise, so it must be shared. Decoding is the mesh-free
+    spectral decoder at the sphere's points.
 
-    **Rotation needs no gauge fixing here**, contrary to the warning in
-    ``codec.py``. On registered data against a shared template, ρ̂ is exactly
-    rotation-invariant — measured 3.7e-15 (direct) and 6.9e-10 (adjoint) under a
-    random rotation — because ``H`` is rotation-invariant and ``e^u`` comes from
-    edge *lengths*. So no Procrustes stage, no Wigner-D augmentation, no
-    equivariant architecture. That warning applies to *unregistered* data, where
-    each shape gets its own cMCF sphere that is itself only defined up to rotation.
+    On registered data against a shared template, ``direct`` codes are exactly
+    rotation-invariant (measured 3.7e-15 under a random rotation), since ``H``
+    and the edge-length conformal factor are -- so no rotation gauge is needed.
 
-    ``method`` defaults to ``"direct"``: the adjoint costs 321-376 s on a 26k-vertex
-    head, which puts a few thousand meshes out of reach, and its codes are not
-    comparable across meshes (46% per-band at L=12 against direct's 12%) — a
-    defect rather than a detail for a model fitted over a whole dataset.
+    ``method="direct"`` (default) is what training uses: milliseconds per mesh,
+    a measurement comparable across meshes, and its fields are reusable across
+    ``L``. ``method="spectral"`` runs the adjoint encoder per mesh against the
+    shared sphere -- ~5x more accurate, minutes per mesh.
     """
 
     def __init__(self, sphere, faces, L, method="direct", mean=None, scale=None):
@@ -119,15 +113,13 @@ class RhoBasis:
     def rho_fields(self, X) -> np.ndarray:
         """``(N, n)`` per-vertex ρ for every shape, before any band-limiting.
 
-        Split out because **ρ_direct does not depend on L** — only the projection
-        does. The expensive part is the per-mesh ``u_edge_lsq`` (an LSQR over
-        every edge, 26k vertices for a head), so computing the fields once and
-        projecting them at several bandwidths turns an L-sweep from N x |L| solves
-        into N. Pass the result back as ``fields=`` to :meth:`fit`, or cache it to
-        disk with ``scripts/encode_faces.py``.
+        **ρ_direct does not depend on L** -- only the projection does -- and the
+        per-mesh ``u_edge_lsq`` (an LSQR over every edge) is the expensive part,
+        so compute the fields once and pass them as ``fields=`` to :meth:`fit` /
+        :meth:`encode`, or cache them with ``scripts/encode_faces.py``.
 
-        Not available for ``method="adjoint"``, whose ρ *is* fitted at a specific
-        bandwidth and so cannot be reused across L.
+        Only for ``method="direct"``: a ``spectral`` code is fitted at a
+        specific bandwidth and cannot be reused across L.
         """
         from ..geom.mesh import Mesh  # noqa: PLC0415
         from ..geom.spin import mesh_to_rho_direct  # noqa: PLC0415
@@ -167,11 +159,9 @@ class RhoBasis:
         # share a physical scale, so pooling them estimates it from 2l+1 times as
         # much data. Per-coefficient std is noisy when N is not >> K.
         #
-        # Pool the CENTRED coefficients. Pooling raw ones folds the spread of the
-        # per-coefficient means into the scale, which over-estimates it and leaves
-        # the whitened codes under-normalised -- measured, per-band std came out
-        # at 0.25 instead of 1, and the flow then under-weights those bands for
-        # exactly the reason whitening exists.
+        # Pool the CENTRED coefficients: pooling raw ones folds the spread of the
+        # per-coefficient means into the scale and leaves the whitened codes
+        # under-normalised (measured per-band std 0.25 instead of 1).
         from ..codec import band_index  # noqa: PLC0415
         bi = band_index(L)
         Cc = C - b.mean

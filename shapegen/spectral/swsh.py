@@ -2,7 +2,7 @@
 
 Self-contained NumPy/SciPy implementation (float64, zero heavy deps). The basis
 is built from the Wigner small-d function, by a **stable three-term recurrence
-in ℓ** (:func:`wigner_d_ladder`, PLAN.md §P8.1); the convention is verified in
+in ℓ** (:func:`wigner_d_ladder`); the convention is verified in
 the tests against the ``spherical`` package (independent oracle) at every spin
 and scipy ``sph_harm_y`` at spin 0, namely
 
@@ -16,21 +16,13 @@ Transforms use a Gauss-Legendre (θ) x equiangular (φ) grid with ``Nθ = L+1`` 
 ``Nφ = 2L+1``, which makes ``analy∘synth = id`` exactly for band-limited spin
 fields (the relevant products are degree-≤2L polynomials in cosθ).
 
-**Accuracy (PLAN.md §P8.1's gate: 1e-12 round trip at band 32).** Met with three
-decades to spare, at every spin tried::
+**Accuracy** (gate: 1e-12 round trip at band 32), at every spin tried::
 
     L=16  1.0e-14    L=24  4.0e-14    L=32  4.3e-14    L=48  1.3e-13
 
-This module used to build ``d`` from Wigner's sum formula, which alternates in
-sign over O(ℓ) terms with a ``(2ℓ)!`` prefactor: that was ~1e-12 at L=16 but
-degraded to **5.3e-8 at L=32** -- the band this project targets -- and overflowed
-outright at L=64. PLAN.md flagged it as a decision to take before anything else
-in §P8/§P9 and offered a ``ducc0``/``shtns`` dependency as the alternative; the
-recurrence keeps the module dependency-free and is flat in ℓ instead.
-
-**Half-integer degrees (§P8.2)** fall out of the same recurrence with no special
-casing -- see :func:`wigner_d_ladder` and the ``half_*`` functions below, which
-spin-±1/2 fields (and so :mod:`shapegen.geom.dirac_spectral`) need.
+**Half-integer degrees** come from the same recurrence with no special casing;
+the ``half_*`` functions below serve spin-±1/2 fields
+(:mod:`shapegen.geom.dirac_spectral`).
 """
 
 from functools import lru_cache
@@ -48,7 +40,7 @@ __all__ = [
     "mode_list", "eval_basis", "fit_coeffs",
     "euler_zyz", "wigner_D", "rotate_coeffs",
     "half_modes", "half_grid", "half_basis", "half_synth", "half_analy",
-    "half_edth_factor", "half_edthbar_factor", "half_eval_basis",
+    "half_edth_factor", "half_edthbar_factor", "half_eval_basis", "half_eval_adjoint",
 ]
 
 
@@ -75,26 +67,12 @@ def _d_seed(l0: float, a: float, b: float, theta: np.ndarray) -> np.ndarray:
 def wigner_d_ladder(lmax: float, a: float, b: float, theta: np.ndarray):
     """``(degrees, d)`` with ``d[i] = d^{degrees[i]}_{a,b}(θ)`` for every degree
     from ``max(|a|,|b|)`` to ``lmax`` in unit steps -- by a stable three-term
-    recurrence in ℓ (PLAN.md §P8.1).
+    recurrence in ℓ.
 
-    **Why this replaced Wigner's sum formula.** That sum alternates in sign
-    over ``O(ℓ)`` terms whose prefactor grows like ``(2ℓ)!``, so it loses
-    precision catastrophically with degree. Measured on ``Σ_b (d^ℓ_{a,b})² = 1``,
-    which any correct implementation satisfies exactly:
-
-    | ℓ  | sum formula | this recurrence |
-    |----|-------------|-----------------|
-    | 8  | 6.2e-15     | 2.0e-15         |
-    | 16 | 4.5e-13     | 9.1e-15         |
-    | 24 | 6.1e-11     | 1.8e-14         |
-    | 32 | 3.7e-08     | 1.9e-14         |
-    | 48 | 1.1e-03     | 2.1e-14         |
-    | 64 | OverflowError | 4.4e-14       |
-
-    PLAN.md §P8.1 called this decision out as one to take early ("upstream of
-    everything in P8 and P9"), with the alternative being a dependency on
-    ``ducc0``/``shtns``. The recurrence keeps the module dependency-free and
-    is flat in ℓ, so it wins on both counts.
+    Unitarity error ``Σ_b (d^ℓ_{a,b})² − 1`` stays at 2e-15 (ℓ=8) to 4.4e-14
+    (ℓ=64). Trap: Wigner's explicit sum formula alternates in sign under a
+    ``(2ℓ)!`` prefactor -- 3.7e-8 at ℓ=32, overflow at ℓ=64 -- so use it only
+    at the seed degree (:func:`_d_seed`).
 
     The recurrence is
 
@@ -105,12 +83,9 @@ def wigner_d_ladder(lmax: float, a: float, b: float, theta: np.ndarray):
     which at ``a = b = 0`` reduces to Legendre's -- the cheapest check that it
     is transcribed correctly.
 
-    **``a`` and ``b`` may be half-integers** (PLAN.md §P8.2), with no special
-    casing: ``a−b`` stays an integer, so every factorial argument above stays
-    a non-negative integer and the recurrence coefficients do not care. That
-    is the whole of the half-integer implementation -- ``halfspin.py``'s
-    ``fac(x) = Γ(x+1)`` trick applied to a formula that is stable to begin
-    with.
+    ``a`` and ``b`` may be half-integers with no special casing: ``a−b``
+    stays an integer, so the seed's factorial arguments stay non-negative
+    integers and the recurrence coefficients do not care.
     """
     theta = np.atleast_1d(np.asarray(theta, dtype=float))
     l0 = max(abs(a), abs(b))
@@ -164,8 +139,7 @@ def _basis(s: int, L: int):
     grid = gl_grid(L)
     th, ph = grid.theta, grid.phi
     Y = {}
-    # loop over m and walk the whole ℓ ladder in one recurrence, rather than
-    # one independent sum per (ℓ, m) -- both stabler (§P8.1) and cheaper
+    # one ℓ ladder per m
     for m in range(-L, L + 1):
         ls, d = wigner_d_ladder(L, m, -s, th)
         eim = np.exp(1j * m * ph)
@@ -189,14 +163,9 @@ def basis_matrix(s: int, L: int):
     ``mode_list(s, L)[i] = (l, m)``) and ``rows[i], cols[i] = l, l+m`` -- the
     ``C[l, l+m]`` index each row corresponds to.
 
-    This is what makes :func:`synth`/:func:`analy` a single matrix-vector
-    product instead of a Python loop over every ``(l, m)`` -- pulled out once
-    per ``(s, L)`` and cached, same as ``_basis`` itself. Also exposed
-    directly (not just via ``synth``/``analy``) for callers building their
-    own operators out of several spins at once, e.g.
-    ``shapegen.quad.field.assemble_C``, where going through ``synth``/
-    ``analy`` one column at a time would mean re-reading this same matrix
-    from memory once per column instead of once per assembly.
+    Cached per ``(s, L)``; makes :func:`synth`/:func:`analy` one
+    matrix-vector product, and is used directly by operator builders such as
+    :func:`shapegen.quad.field.assemble_C`.
     """
     Y = _basis(s, L)
     modes = mode_list(s, L)
@@ -398,24 +367,13 @@ def rotate_coeffs(C: np.ndarray, R: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Half-integer degrees and spins (PLAN.md §P8.2)
+# Half-integer degrees and spins
 # ---------------------------------------------------------------------------
 #
-# A spin-±1/2 field is what the quaternionic Dirac solve (§P9,
-# :mod:`shapegen.geom.dirac_spectral`) is written in, and it needs half-integer
-# ℓ and m. The recurrence above already handles those, so all that is missing
-# is a container and a quadrature.
-#
-# These deliberately do NOT reuse the integer path's dense ``C[ℓ, ℓ+m]``
-# array. Half-integer ℓ would need a second indexing convention inside every
-# one of ``synth``/``analy``/``edth``/``edthbar``, and those are pinned by the
-# oracle tests against the ``spherical`` package. A flat mode-list vector is
-# both simpler and exactly what a dense eigensolver wants anyway.
-#
-# The fields themselves are antiperiodic in φ (period 4π, not 2π), so they are
-# not single-valued on the sphere. The transform is unaffected: every
-# *difference* m − m' is an integer, so discrete orthogonality in φ still
-# holds on [0, 2π).
+# Spin-±1/2 fields for the Dirac solve (:mod:`shapegen.geom.dirac_spectral`).
+# Coefficients are flat vectors in :func:`half_modes` order, not the integer
+# path's dense ``C[ℓ, ℓ+m]``. The fields are antiperiodic in φ (period 4π);
+# the transform is unaffected because every difference m − m' is an integer.
 
 def _is_half(x) -> bool:
     return abs((float(x) * 2.0) % 2.0 - 1.0) < 1e-12
@@ -490,12 +448,34 @@ def half_analy(field: np.ndarray, s: float, L: float) -> np.ndarray:
     return half_basis(s, L).conj() @ (np.asarray(field) * w).ravel()
 
 
+def half_eval_adjoint(s: float, L: float, theta: np.ndarray, phi: np.ndarray,
+                      g: np.ndarray) -> np.ndarray:
+    """``half_eval_basis(s, L, theta, phi).conj().T @ g`` without forming the
+    ``(npts, nmodes)`` basis: one Wigner ladder per ``m`` against
+    ``e^{-imφ} g``. With ``g`` = values × quadrature weights, this projects
+    scattered samples onto the spin-``s`` basis. ``phi`` must be the same branch
+    the samples' frame used (see :func:`half_eval_basis`'s trap)."""
+    theta = np.asarray(theta, dtype=float).ravel()
+    phi = np.asarray(phi, dtype=float).ravel()
+    modes = half_modes(s, L)
+    col = {lm: i for i, lm in enumerate(modes)}
+    out = np.zeros(len(modes), dtype=complex)
+    m = -L
+    while m <= L + 1e-9:
+        ls, d = wigner_d_ladder(L, m, -s, theta)
+        v = d @ (np.exp(-1j * m * phi) * g)
+        for i, l in enumerate(ls):
+            out[col[(l, m)]] = sqrt((2 * l + 1) / (4.0 * np.pi)) * v[i]
+        m += 1.0
+    return out
+
+
 def half_edth_factor(s: float, L: float) -> np.ndarray:
     """Per-mode ð factors ``+√((ℓ−s)(ℓ+s+1))``, spin ``s`` -> ``s+1``.
 
     At ``s = −1/2`` this is exactly ``ℓ + 1/2``, and at ``s = +1/2``
-    :func:`half_edthbar_factor` is ``−(ℓ + 1/2)`` -- the two magnitudes the
-    Dirac system in §P9 is built from."""
+    :func:`half_edthbar_factor` is ``−(ℓ + 1/2)`` -- the Dirac system's
+    diagonal."""
     return np.array([sqrt(max((l - s) * (l + s + 1.0), 0.0))
                      for l, _m in half_modes(s, L)])
 
@@ -511,16 +491,12 @@ def half_eval_basis(s: float, L: float, theta: np.ndarray,
     """Half-integer spin-``s`` basis at arbitrary ``(theta, phi)`` -- the
     off-grid counterpart of :func:`half_basis`.
 
-    ``(npts, nmodes)``, columns following :func:`half_modes`. Needed wherever
-    a spinor has to be evaluated somewhere other than the solve's own
-    quadrature grid -- e.g. at the vertices of a traced quad mesh, which is
-    what §P7 route 2 lifts.
+    ``(npts, nmodes)``, columns following :func:`half_modes`.
 
-    The values are **not** single-valued functions on the sphere: ``m`` is a
-    half-integer, so ``e^{i m phi}`` is antiperiodic and the sign depends on
-    the branch of ``phi``. Anything built from these has to be quadratic in
-    the spinor (as ``|lambda|^2`` and ``lambda-bar df lambda`` both are) for
-    that sign to cancel.
+    Trap: the values are not single-valued -- ``e^{i m phi}`` with
+    half-integer ``m`` flips sign with the branch of ``phi`` -- so only
+    quantities quadratic in the spinor (``|lambda|^2``,
+    ``lambda-bar df lambda``) are meaningful.
     """
     theta = np.asarray(theta, dtype=float).ravel()
     phi = np.asarray(phi, dtype=float).ravel()

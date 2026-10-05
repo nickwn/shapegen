@@ -1,7 +1,7 @@
 """Acceptance tests for the public codec façade.
 
-The maths is gated in test_dirac / test_dirac_adjoint / test_encode. What is
-checked here is the contract downstream code depends on: a round trip through the
+The maths is gated in test_dirac_spectral / test_spectral_adjoint /
+test_eigen_sphere / test_encode. What is checked here is the contract downstream code depends on: a round trip through the
 façade reproduces the error it reports, and the convergence flag is honest.
 """
 
@@ -16,8 +16,8 @@ def test_roundtrip_reproduces_the_reported_error():
     """``decode(encode(m))`` must actually reproduce the error ``encode`` claims —
     the one contract everything downstream leans on."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    res = codec.encode(mesh, L=8, maxiter=40, method="adjoint")
-    X = codec.decode(res.coeffs, res.sphere, mesh.faces)
+    res = codec.encode(mesh, L=8, maxiter=40)
+    X = codec.decode(res.coeffs, res.sphere)
     err = codec.shape_error(mesh.vertices, X)
     print(f"[codec] {res}  decode-check {err:.5f}")
     assert err == pytest.approx(res.err, rel=1e-9)
@@ -27,7 +27,7 @@ def test_roundtrip_reproduces_the_reported_error():
 
 def test_encode_beats_its_initialiser():
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=1)[0]
-    res = codec.encode(mesh, L=8, maxiter=40, method="adjoint")
+    res = codec.encode(mesh, L=8, maxiter=40)
     assert res.err < 0.6 * res.err0
 
 
@@ -38,7 +38,7 @@ def test_converged_flag_is_honest():
     only thing standing between that and a silently overstated result.
     """
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
-    capped = codec.encode(mesh, L=4, maxiter=1, method="adjoint")
+    capped = codec.encode(mesh, L=4, maxiter=1)
     assert not capped.converged
 
 
@@ -72,19 +72,18 @@ def test_base_sphere_is_gauge_fixed_and_round():
     assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
 
 
-def test_direct_and_adjoint_are_both_available_and_differ():
-    """The two encoders sit at opposite ends of an accuracy / mesh-independence
-    trade, so both must be reachable and the adjoint must actually be better on a
-    fixed mesh (which is the axis it wins on)."""
+def test_direct_and_spectral_are_both_available_and_differ():
+    """``direct`` is the cheap measurement training uses; ``spectral`` (the
+    default) optimises the decoded shape and must beat it on a fixed mesh. Both
+    decode to exactly the error they report."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     loc = codec.encode(mesh, L=8, method="direct")
-    adj = codec.encode(mesh, L=8, method="adjoint", maxiter=60, sphere=loc.sphere)
-    print(f"[direct] {loc.err:.5f}   [adjoint] {adj.err:.5f}")
-    assert adj.err < loc.err
+    spec = codec.encode(mesh, L=8, maxiter=60, sphere=loc.sphere)
+    print(f"[direct] {loc.err:.5f}   [spectral] {spec.err:.5f}")
+    assert spec.err < loc.err
     assert loc.niter == 0                      # a measurement, not an optimisation
-    assert loc.coeffs.shape == adj.coeffs.shape
-    # the direct result must still decode to what it claims
-    X = codec.decode(loc.coeffs, loc.sphere, mesh.faces)
+    assert loc.coeffs.shape == spec.coeffs.shape
+    X = codec.decode(loc.coeffs, loc.sphere)
     assert codec.shape_error(mesh.vertices, X) == pytest.approx(loc.err, rel=1e-9)
 
 
@@ -103,48 +102,24 @@ def test_template_sphere_is_canonical_and_round():
         assert np.abs(np.linalg.norm(t1, axis=1) - 1.0).max() < 1e-12
 
 
-def test_encode_dataset_shares_one_sphere():
-    """Every code in a dataset must be defined against the same sphere, else the
-    coefficients do not share a meaning and the model learns noise."""
-    meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results, dec = codec.encode_dataset(meshes, L=4, maxiter=20,
-                                               method="adjoint")
-    assert coeffs.shape == (2, codec.n_coeffs(4))
-    assert np.array_equal(results[0].sphere, results[1].sphere)
-    assert np.array_equal(results[0].sphere, codec.template_sphere(2))
-    assert np.array_equal(dec, codec.template_sphere(2))
-
-
-def test_encode_dataset_direct_uses_per_mesh_spheres():
-    """With no ``sphere`` given, ``direct`` measures each mesh on its OWN cMCF
-    sphere and returns a canonical decode sphere separately."""
-    meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="direct")
-    assert coeffs.shape == (2, codec.n_coeffs(4))
-    # per-mesh spheres genuinely differ ...
-    assert not np.array_equal(results[0].sphere, results[1].sphere)
-    # ... but the decode sphere is one shared object
-    assert dec.shape == meshes[0].vertices.shape
-    # and the codes decode on it
-    X = codec.decode(coeffs[0], dec, meshes[0].faces)
-    assert np.isfinite(X).all()
-
-
-def test_encode_dataset_direct_accepts_a_shared_sphere():
-    """``direct`` against ONE template is the mode a generative pipeline needs —
-    at sample time there is no mesh, so there is no cMCF sphere to recover.
-
-    This was previously rejected as a category error. It is not: measured, a
-    direct code decodes on a sphere it never saw at 0.5-0.9x the error it gets on
-    its own, so a shared template is portable rather than meaningless.
-    """
+def test_encode_dataset_can_share_one_sphere():
+    """A registered dataset encoded against ONE sphere: every code is defined
+    relative to the identical object."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
     T = codec.template_sphere(2)
-    coeffs, results, dec = codec.encode_dataset(meshes, L=4, method="direct",
-                                                sphere=T)
-    assert np.array_equal(dec, T)
-    assert all(np.array_equal(r.sphere, T) for r in results)
+    coeffs, results = codec.encode_dataset(meshes, L=4, maxiter=20, sphere=T)
     assert coeffs.shape == (2, codec.n_coeffs(4))
+    assert all(np.array_equal(r.sphere, T) for r in results)
+
+
+def test_encode_dataset_defaults_to_per_mesh_spheres():
+    """With no ``sphere``, each mesh is encoded on its own conformal sphere, and
+    each code decodes on it."""
+    meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
+    coeffs, results = codec.encode_dataset(meshes, L=4, method="direct")
+    assert coeffs.shape == (2, codec.n_coeffs(4))
+    assert not np.array_equal(results[0].sphere, results[1].sphere)
+    assert np.isfinite(codec.decode(coeffs[0], results[0].sphere)).all()
 
 
 def test_parallel_encode_matches_serial():
@@ -152,14 +127,12 @@ def test_parallel_encode_matches_serial():
 
     Order is the real risk: collecting results as they complete rather than by
     index would misalign every code with its mesh, and nothing downstream would
-    notice. Tolerance is 1e-8 rather than exact because ARPACK's eigensolve is not
-    bit-reproducible — two *serial* runs differ at 6e-11 — so demanding equality
-    would be testing the wrong thing.
+    notice.
     """
     meshes = demo_bottle_meshes(n=4, subdiv=2, seed=0)
     T = codec.template_sphere(2)
-    a, _, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=1)
-    b, _, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=2)
+    a, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=1)
+    b, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=2)
     assert np.abs(a - b).max() < 1e-8
     # order preserved: each row must match ITS OWN mesh, not merely be present
     for i, m in enumerate(meshes):
@@ -188,16 +161,11 @@ def test_chamfer_scale_align_is_vertex_count_independent():
     assert chamfer(A * 3.0, A, scale_align=True) < 1e-12
 
 
-def test_decode_is_mesh_independent_when_rho_is_realisable():
-    """The contract behind "encode to SH, decode from SH": ρ̂ is a function on S²,
-    so decoding it on ANY sphere mesh gives the same surface.
-
-    That holds exactly while ρ is **realisable**. When γ > 0 no immersion has that
-    ρ, the eigensolve returns a least-squares fit, and which fit depends on the
-    quadrature — so the decode stops being a function of the coefficients alone.
-    Measured on a face at L=16: γ=4.6e-13 gives cross-mesh agreement at the
-    vertex-spacing floor, while γ=2.2e-2 puts it 0.057 above.
-    """
+def test_decode_is_sampling_independent():
+    """The contract behind "encode to SH, decode from SH": the decoded surface is
+    a band-limited function on S², so decoding on ANY set of sphere points gives
+    the same surface -- whatever γ is (the old mesh decoder lost this at
+    γ ≈ 2e-2, where two meshes disagreed by 0.057)."""
     from scipy.spatial import cKDTree
     from shapegen.geom.mesh import icosphere
     from shapegen.geom.operators import vertex_areas
@@ -218,9 +186,9 @@ def test_decode_is_mesh_independent_when_rho_is_realisable():
 
     rng = np.random.default_rng(0)
     c = np.zeros(codec.n_coeffs(4))
-    c[1:9] = 0.02 * rng.standard_normal(8)          # small => nearly realisable
-    Xa = norm_shape(codec.decode(c, Pa, a.faces), a.faces)
-    Xb = norm_shape(codec.decode(c, Pb, b.faces), b.faces)
+    c[1:9] = 0.5 * rng.standard_normal(8)           # far from realisable: γ ≫ 0
+    Xa = norm_shape(codec.decode(c, Pa), a.faces)
+    Xb = norm_shape(codec.decode(c, Pb), b.faces)
     print(f"[mesh-independence] floor {floor:.5f}, with rho {cham(Xa, Xb):.5f}")
     assert cham(Xa, Xb) < floor * 1.15
 

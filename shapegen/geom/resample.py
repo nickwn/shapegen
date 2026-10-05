@@ -1,21 +1,12 @@
 """Resample a sphere-parameterised mesh onto a different sphere discretisation.
 
-A cMCF sphere inherits its source mesh's triangulation, which for a registered
-face set means **2.1e6x triangle-area spread** — areas down to 3.4e-9. Two stages
-of the codec divide by those areas: the Dirac assembly's ``-e_p e_q / (4 A_f)``,
-which reaches ``1/(4A) = 7.4e7``, and :func:`~shapegen.geom.encode.sh_project`'s
-Galerkin mass. Moving to a uniform icosphere (1.3x spread) is worth about **27%**
-of reconstruction error and flattens the error-vs-L curve, so the optimum sits at
-L=16-24 rather than 12.
-
-What is *not* claimed: that the cMCF sphere is unusable. Decoding on it
-reconstructs at 0.047-0.060 across L=8..32, which is serviceable. This is a
-conditioning improvement, not a rescue.
-
-The parameterisation is unchanged by resampling. The cMCF sphere is used once, to
-answer "which point of the target does this direction correspond to", and then
-discarded; the same conformal map is simply sampled at uniform positions instead
-of at the source mesh's own vertices.
+A sphere map (:func:`shapegen.codec.base_sphere`) lives on its source mesh's
+triangulation, which for a FaceScape head is far from area-uniform (vertex-area
+spread ~2e7 on the remeshed mean head). The ρ projection weights by sphere vertex
+areas, so :func:`shapegen.data.faces.build_dataset` uses the map once, to answer
+"which point of the head does this direction correspond to", and then samples it
+at the vertices of a uniform icosphere. The parameterisation is unchanged; only
+the sampling is.
 """
 
 from __future__ import annotations
@@ -31,7 +22,7 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
 
     A hybrid, because neither half is sufficient alone. libigl's
     ``point_mesh_squared_distance`` supplies the containing face from an AABB tree
-    in C++ — robust, and the part that was hand-rolled and buggy. But it returns
+    in C++ — robust. But it returns
     the **nearest** point on the mesh, and what is wanted is the **radial**
     intersection: where the ray from the origin along ``d`` crosses the triangle.
     Those coincide on a well-shaped sphere and diverge on a distorted one, so the
@@ -39,16 +30,14 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
     Taking igl's point directly produced 88 sliver triangles on a deliberately
     degenerate source.
 
-    This replaced a hand-rolled search that shipped two bugs, both worth recording
-    because they are the failure modes any replacement must avoid:
+    Traps any replacement must avoid (both shipped once):
 
     * searching from the nearest triangle **centroid** misses points inside large
-      triangles — on a mesh with 1e6x area spread a centroid can be far from its
-      own interior — which left 39 of 10242 directions unresolved;
-    * leaving those unresolved as index ``-1`` with zero weights silently indexes
-      the last face and places the vertex at the **origin**. That produced 44
-      zero-area triangles, rho values of 1e91, and finally an ARPACK "starting
-      vector is zero" hundreds of lines away with nothing in between to explain it.
+      triangles on a mesh with large area spread;
+    * leaving unresolved directions as index ``-1`` with zero weights silently
+      indexes the last face and places the vertex at the **origin** -- zero-area
+      triangles, ρ values of 1e91, and an ARPACK "starting vector is zero" far
+      downstream.
 
     ``n_fallback`` counts faces whose plane passes through the origin, where the
     radial weights are undefined and the centroid is substituted. On a sphere mesh
@@ -56,13 +45,11 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
     about the origin and the whole resampling is suspect.
 
     **Limitation.** Radial projection is ill-conditioned when a face's plane
-    passes near the origin, and a real cMCF sphere does contain such faces —
-    measured, the closest face plane on a FaceScape head's sphere sits 0.128 from
-    the origin against an ideal 1.0. It is benign there only because those faces
-    are small and absorb few queries; the production path returns 0 fallbacks and
-    0 sliver triangles at icosphere subdiv 5 and 6. A source with *few, huge*
-    near-origin faces does produce collapsed output triangles, so check
-    `triangle_areas` on the result if the source is unusual.
+    passes near the origin. On the eigen sphere of a remeshed FaceScape mean head
+    the closest face plane sits 0.69 from the origin (ideal 1.0), and the
+    production path returns 0 fallbacks at icosphere subdiv 6. A source with
+    *few, huge* near-origin faces does produce collapsed output triangles, so
+    check triangle areas on the result if the source is unusual.
 
     ``k`` is unused and kept for signature compatibility.
     """

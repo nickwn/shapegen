@@ -1,11 +1,11 @@
-"""PLAN.md §P7 route 2: the spinor-to-quaternion dictionary and the
-mesh-free lift built on it (:mod:`shapegen.quad.lift`).
+"""The spinor-to-quaternion dictionary and the mesh-free lift
+built on it (:mod:`shapegen.quad.lift`).
 
 The dictionary is the gate — and the round sphere alone cannot pin it (see
 ``test_kernel_gauge_is_a_right_constant``). ``geom/dirac_spectral`` returns ``λ`` as spin-±½
 halves; every one of these tests exists because building an immersion on an
 unverified spinor-to-quaternion map is how a wrong convention becomes a silent
-geometric error (PLAN.md §2.4).
+geometric error.
 """
 
 from __future__ import annotations
@@ -155,103 +155,27 @@ def test_spinor_quaternion_is_single_valued():
 # The lift                                                                    #
 # --------------------------------------------------------------------------- #
 
-def test_integrate_edges_lsq_is_exact_on_a_consistent_field():
-    """PLAN.md §1: the global least-squares solve is *exact*, not O(h²).
-    On an integrable edge field it must return the generating positions."""
-    V, faces = _sphere(2)
-    E = _edges(faces)
-    et = V[E[:, 1]] - V[E[:, 0]]              # exactly integrable by construction
-    X, G = ql.integrate_edges_lsq(len(V), E, et)
-    assert np.abs(G @ X - et).max() < 1e-10
-    assert codec.shape_error(V, X) < 1e-10
 
-
-def test_route2_reconstructs_the_round_sphere():
-    """ρ = 0 ⇒ λ is constant ⇒ df̃ is a rotation of df₀ ⇒ the sphere back."""
-    V, faces = _sphere(3)
-    E = _edges(faces)
-    P3, info = ql.lift_route2(V, E, np.zeros(n_coeffs(L)), L, faces=faces)
+def test_lift_spectral_reconstructs_the_round_sphere():
+    V, _faces = _sphere(4)
+    Xs, info = ql.lift_spectral(V, np.zeros(n_coeffs(L)), L)
     assert info["gamma"] < 1e-12
-    assert codec.shape_error(V, P3) < 1e-7
-    assert info["edge_residual"] < 1e-7
-    assert info["holonomy_rel"] < 1e-7      # Gate P7.A at γ = 0
+    assert codec.shape_error(V, Xs) < 1e-12
 
 
-def test_p7a_holonomy_grows_with_gamma():
-    """**Gate P7.A.** ``df̃`` is closed only at γ = 0; the obstruction must be
-    ~0 there and grow with γ. Measured before the least-squares solve, which
-    would otherwise absorb it silently — and the post-solve edge residual is
-    checked to grow too, so a solve that *did* hide it would fail here."""
-    V, faces = _sphere(3)
-    E = _edges(faces)
-    base = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)]
-    hol, resid, gam = [], [], []
-    for amp in (0.0, 0.5, 2.0):
-        _P, info = ql.lift_route2(V, E, base * amp, L, faces=faces)
-        hol.append(info["holonomy_rel"])
-        resid.append(info["edge_residual"])
-        gam.append(info["gamma"])
-    assert gam[0] < 1e-12 < gam[1] < gam[2]
-    assert hol[0] < 1e-7
-    assert hol[0] < hol[1] < hol[2]
-    assert resid[0] < 1e-7
-    assert resid[0] < resid[1] < resid[2]
-    # second order in amplitude, not the old map's ~0.28·√γ: measured 1.8e-3
-    # at amp 2 here (the pre-2026-09-26 dictionary gave ~1.7e-2)
-    assert hol[2] < 5e-3, hol
-
-
-def test_route2_quadrature_converges():
-    """The arc integration is Simpson, O(h⁵) per edge, so at ρ = 0 — where
-    the only error left *is* the quadrature — the residual must fall sharply
-    with the mesh.
-
-    The *ratio* is asserted rather than an absolute tolerance: the floor
-    depends on the band (measured 3.8e-8 → 2.3e-9 at L=8, and 4.5e-10 →
-    1.4e-11 at L=12, both between icosphere subdivisions 3 and 4), so a fixed
-    threshold would only encode which ``L`` this file happens to use.
-    """
-    out = []
-    for subdiv in (3, 4):
-        V, faces = _sphere(subdiv)
-        _P3, info = ql.lift_route2(V, _edges(faces), np.zeros(n_coeffs(L)), L)
-        out.append(info["edge_residual"])
-    assert out[0] / out[1] > 8.0, out
-    assert out[1] < 1e-8, out
-
-
-@pytest.mark.parametrize("amp, tol", [(0.1, 1e-3), (2.0, 5e-3)])
-def test_route2_matches_the_decode(amp, tol):
-    """Route 2 and route 1's ``codec.decode`` agree, and the disagreement
-    shrinks with the *decode's* mesh — route 2 never uses one. Measured at
-    amp 2 (γ = 1.2e-2): 2.1e-3 at subdivision 3, 7.5e-4 at 4. The
-    pre-2026-09-26 dictionary gave ~0.12 there, and only met a 0.05 bound at
-    amp 0.1."""
+@pytest.mark.parametrize("amp", [0.1, 2.0])
+def test_mesh_decoder_converges_to_lift_spectral(amp):
+    """``lift_spectral`` is the continuum answer the triangle-mesh spin
+    transform (:mod:`shapegen.geom.dirac`, an independent solver) approximates: their
+    disagreement falls O(h²) with subdivision. Measured 3.8e-4 -> 9.7e-5 ->
+    2.4e-5 at amp 0.1 and 7.9e-3 -> 2.1e-3 -> 5.2e-4 at amp 2 (γ = 1.2e-2),
+    subdivisions 2/3/4 -- a factor of ~3.9 each step."""
     base = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)] * amp
     errs = []
-    for subdiv in (2, 3):
+    for subdiv in (2, 3, 4):
         V, faces = _sphere(subdiv)
-        P3, _info = ql.lift_route2(V, _edges(faces), base, L)
-        errs.append(codec.shape_error(codec.decode(base, V, faces), P3))
-    assert errs[1] < tol, errs
-    assert errs[1] < errs[0], errs
-
-
-def test_arc_rule_choice_does_not_matter():
-    """Simpson vs 5-point Gauss on the same arcs: the quadrature is far below
-    the γ term, so refining the rule must change nothing material."""
-    V, faces = _sphere(3)
-    E = _edges(faces)
-    base = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)]
-    res = ds.solve_spinor(base, L)
-    a = ql.arc_transformed_edges(res, V, E, rule="simpson")
-    b = ql.arc_transformed_edges(res, V, E, rule="gauss5")
-    rel = np.abs(a - b).max() / np.linalg.norm(a, axis=1).mean()
-    assert rel < 1e-4, rel
-
-
-def test_lift_route2_rejects_an_unknown_rule():
-    V, faces = _sphere(2)
-    res = ds.solve_spinor(np.zeros(n_coeffs(L)), L)
-    with pytest.raises(ValueError, match="unknown rule"):
-        ql.arc_transformed_edges(res, V, _edges(faces), rule="nope")
+        Xs, _ = ql.lift_spectral(V, base, L)
+        lam, _ = dirac.spin_transform(V, faces, real_sh_basis(V, L) @ base)
+        errs.append(codec.shape_error(dirac.integrate_edges(V, faces, lam), Xs))
+    assert errs[0] / errs[1] > 3.0 and errs[1] / errs[2] > 3.0, errs
+    assert errs[2] < 1e-3, errs

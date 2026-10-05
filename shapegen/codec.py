@@ -1,22 +1,18 @@
 """The ρ codec: mesh ↔ band-limited spherical-harmonic coefficients of ρ.
 
-One import for everything downstream. A generative model over ρ̂ should need this
-module and nothing else — the Dirac operator, its adjoint and the optimiser stay
-behind it.
+One import for everything downstream::
 
-    sphere = base_sphere(mesh)                  # cMCF + Möbius gauge fix
-    res    = encode(mesh, L=12, sphere=sphere)  # mesh -> rho_hat
-    X      = decode(res.coeffs, sphere, mesh.faces)
-    err    = shape_error(mesh.vertices, X)
+    res = encode(mesh, L=32)                          # spectral adjoint (default)
+    X   = decode(res.coeffs, res.sphere)              # positions at res.sphere
+    err = shape_error(mesh.vertices, X)               # == res.err
 
-**ρ̂ is defined relative to a base sphere**, so the sphere travels with the
-coefficients — decoding against a different parameterisation of the same shape
-gives a different mesh. :class:`EncodeResult` carries it for that reason.
-
-What the codec does *not* fix: the decode determines an immersion only up to a
-similarity, and Möbius normalisation pins everything except **rotation**. Two
-shapes differing by a rotation encode to entirely different ρ̂. Settle that
-before training anything on these coefficients.
+**ρ̂ is defined relative to a sphere parameterisation** of the shape, which
+:class:`EncodeResult` carries. The default is the input's own conformal sphere
+from its Laplace eigenbasis (:func:`base_sphere`). The decoder is mesh-free: the
+spectral Dirac spinor, its surface solved in spherical harmonics
+(:func:`shapegen.quad.lift.lift_spectral`), read off at whatever sphere points
+are asked for. The decode is defined up to a similarity, so compare with
+:func:`shape_error`.
 """
 
 from __future__ import annotations
@@ -25,33 +21,28 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .geom import conformal as _cf
 from .geom import encode as _enc
 
 __all__ = ["EncodeResult", "template_sphere", "base_sphere", "encode",
-           "decode", "shape_error", "n_coeffs", "band_index", "encode_dataset"]
+           "decode", "shape_error", "n_coeffs", "band_index", "encode_dataset",
+           "METHODS"]
 
 n_coeffs = _enc.n_coeffs
 band_index = _enc.band_index
+
+METHODS = ("spectral", "dirac", "quotient", "direct", "polyhedral")
 
 
 @dataclass
 class EncodeResult:
     """An encoded shape, plus what you need to judge whether to trust it.
 
-    ``niter`` and ``gnorm`` are not diagnostics to ignore: a run that stopped at
-    the iteration cap with a gradient still well above zero is an **upper bound**
-    on the error, not a converged encode. :meth:`converged` is the check.
-
-    ``gamma`` is the squared Dirac residual of the encoded ρ, and it is the single
-    most predictive number here. ``γ = 0`` means some immersion actually *has* that
-    ρ; the further above zero, the more the decode is a least-squares fit rather
-    than a solve — and a least-squares fit **depends on the mesh it is solved on**,
-    so the codec's "coefficients are all you need" contract weakens with γ.
-    Measured: at γ≈1e-13 the same coefficients decode identically on a cMCF sphere
-    and an icosphere; at γ≈2e-2 they differ by 0.057. It also rises with bandwidth
-    for the ``direct`` encoder (3.5e-3 at L=8 to 4.6e-2 at L=24), which is why more
-    bands stop paying. Watch it.
+    ``err`` is what :func:`decode` gives back (relative Procrustes). ``gamma`` is
+    the Dirac residual of the code: ``γ = 0`` means some immersion has exactly
+    this ρ. Spectral codes are closed (``ℓ = 0`` set so γ ~1e-15, see
+    :func:`shapegen.geom.dirac_spectral.close_potential`); ``direct`` codes are
+    not measured. :attr:`converged` is False when the optimiser stopped at its
+    iteration cap.
     """
     coeffs: np.ndarray
     sphere: np.ndarray
@@ -60,313 +51,248 @@ class EncodeResult:
     err0: float
     niter: int
     nfev: int
-    gnorm: float
     gamma: float = float("nan")
     status: str = ""
     meta: dict = field(default_factory=dict)
 
     @property
     def converged(self) -> bool:
-        """False when the optimiser ran out of budget rather than converging.
-
-        A ``direct`` encode is not an optimisation, so it reports True — there was
-        no budget to exhaust. Read it as "this is the answer this method gives",
-        not as "this is optimal".
-        """
         return "LIMIT" not in self.status
 
     def __repr__(self):
         flag = "" if self.converged else "  [ITERATION-CAPPED]"
-        return (f"EncodeResult(L={self.L}, err={self.err:.5f}, "
-                f"niter={self.niter}, |g|={self.gnorm:.1e}, "
+        return (f"EncodeResult(L={self.L}, err={self.err:.5f}, niter={self.niter}, "
                 f"gamma={self.gamma:.2e}){flag}")
 
 
 def template_sphere(subdiv: int = 3) -> np.ndarray:
-    """The canonical base sphere: ONE sphere shared by an entire dataset.
-
-    Use this, not :func:`base_sphere`, whenever codes must be comparable — which
-    is always, for generative modelling. The reason is not convenience:
-
-    ρ̂ is defined *relative to* a base sphere. ``ρ = H·e^u − 1`` where ``e^u`` is
-    the conformal factor of the map from that sphere, so changing the sphere
-    changes ρ even for an identical surface. Codes encoded against per-shape cMCF
-    spheres therefore do not share a meaning, and decoding one against a different
-    sphere gives a measurably different shape (chamfer 0.047 vs 0.007). At
-    generation time there is no mesh, hence no cMCF sphere to recover — so the
-    sphere must be fixed in advance, and encoding must use the same one.
-
-    The cost is a reconstruction floor of roughly 4.4% instead of cMCF's 1.3%,
-    flat in resolution because it is *correspondence* error, not discretisation:
-    the identity map from template to shape carries ~6.6% quasi-conformal shear
-    that the spin transform structurally cannot express.
-    """
-    from .geom.mesh import icosphere  # noqa: PLC0415
+    """A unit icosphere: one shared sphere for a registered dataset whose meshes
+    all have its connectivity."""
+    from .geom.mesh import icosphere
     V = icosphere(subdiv).vertices
     return V / np.linalg.norm(V, axis=1, keepdims=True)
 
 
-def base_sphere(mesh, iters: int = 300) -> np.ndarray:
-    """Sphere parameterisation of ``mesh`` on its own connectivity, gauge-fixed.
+def base_sphere(mesh) -> np.ndarray:
+    """Conformal sphere parameterisation of ``mesh`` on its own connectivity,
+    Möbius-normalised against the mesh's own areas (only rotation left free):
+    :func:`shapegen.geom.eigen_sphere.conformal_sphere`, the input's Laplace
+    eigenbasis driven to spherical harmonics. Under a second, and 10-30x more
+    conformal than the cMCF it replaced on scanned heads -- worth ~3x in
+    spectral-encoder accuracy, and 9x faster in the FaceScape dataset build at
+    equal fidelity."""
+    from .geom.eigen_sphere import conformal_sphere
+    return conformal_sphere(mesh.vertices, mesh.faces)
 
-    Conformalized mean-curvature flow, then Möbius-normalised against the mesh's
-    own conformal density — which kills the ℓ=1 freedom and leaves only rotation.
 
-    A ``method="willmore"`` alternative (conformal Willmore flow via the spin
-    transform) was removed. It was selected on quasi-conformal distortion, where
-    it wins narrowly on a bottle at subdiv 3 (0.0170 against cMCF's 0.0194) — but
-    qc turns out not to predict reconstruction accuracy at all (see
-    :func:`~shapegen.geom.spin.qc_distortion`), so the gap bought nothing, and
-    reaching it made this package import from ``scripts/``. The flow itself is
-    still there as ``scripts/willmore_flow.py`` if you want to experiment.
+REFINE_BELOW = 10000      # faces: coarser inputs are remeshed before the sphere map
+REFINE_TO = 12000
+
+
+def encode(mesh, L: int, sphere=None, maxiter: int = 300,
+           method: str = "spectral", refine="auto") -> EncodeResult:
+    """``mesh → ρ̂ ∈ ℝ^((L+1)²)``, relative to ``sphere`` (default
+    :func:`base_sphere`, per mesh).
+
+    **Coarse meshes** (``refine="auto"``: under ``REFINE_BELOW`` faces, and no
+    ``sphere`` given) are first remeshed isotropically to ~``REFINE_TO`` faces
+    (:func:`shapegen.geom.mesh.remesh_isotropic`, the same surface), because the
+    sphere map needs a fine, well-shaped mesh. The code then encodes the
+    *surface*, not its tessellation: a 12-triangle cube and a 12288-triangle one
+    give the same decoded cube. ``res.sphere`` is still per input vertex (carried
+    over from the remeshed map), so ``decode(res.coeffs, res.sphere)`` works as
+    for any mesh. ``res.err`` is measured there. ``res.meta["err_surface"]`` is the
+    error over the whole remeshed surface, the meaningful number when the input
+    has only a few vertices. ``refine=True`` forces the remesh (use it for badly
+    shaped inputs: slivers degrade the sphere map), ``False`` disables it.
+
+    * ``"spectral"`` (default): the adjoint encoder through the mesh-free decoder
+      (:func:`shapegen.geom.spectral_adjoint.encode_spectral`) -- L-BFGS on the
+      Procrustes error of the decode, started from the round sphere (ρ̂ = 0; the
+      start does not change the result) and stopped once the error stalls. On
+      FaceScape heads at L=32: 0.0050 / 0.0045 in ~40 evaluations (~28 s).
+    * ``"dirac"``: no optimiser -- the target's own spinor, and the ρ̂ whose Dirac
+      operator best annihilates it, by two linear least squares
+      (:func:`shapegen.geom.dirac_direct.encode_dirac`). 0.0069 / 0.0061 in ~1.6 s,
+      3-4x better than ``direct``; deterministic.
+    * ``"quotient"``: the Dirac equation read pointwise off the target's spinor,
+      then corrected onto the decoder's truncated equation by three
+      matrix-free passes (:func:`shapegen.geom.dirac_quotient.encode_quotient`).
+      At L=32 it is 1.11x off ``dirac`` on faces and ~1.0x on cubes and bottles.
+      It encodes in ~80 ms, faster than ``direct``; the closing solve and the
+      scoring here add ~0.65 s, so call ``encode_quotient(..., close=False)``
+      for bulk encoding. Below L ≈ 16 ``dirac`` is as fast and better on
+      smooth shapes (1.6x on a bottle at L=8). Deterministic.
+    * ``"polyhedral"`` (only when asked for): reads the mesh literally as a
+      polyhedron and computes its *exact* conformal sphere map and spinor
+      (:func:`shapegen.geom.poly_conformal.encode_polyhedral`). There is no remesh and
+      no eigen sphere, so ``sphere`` and ``refine`` do not apply. The code depends
+      only on the polyhedron: tessellations of one cube (12 → 12288 triangles,
+      flipped diagonals) agree to ~1e-5 in code spectrum, against 5e-4 – 5e-3 for
+      the remesh path. Takes 0.6–11 s. It suits CAD-like, low-poly and flat-faced
+      inputs. A dense smooth mesh has a cone at every vertex and costs faces ×
+      cones, so use ``"quotient"`` there. Codes use a cone-centroid Möbius gauge,
+      so they are not interchangeable with the other methods'.
+      ``res.meta["err_surface"]`` scores the decode over the whole surface.
+    * ``"direct"``: ``ρ = H·e^u − 1`` measured off the geometry and projected --
+      no optimisation, well under a second; what training uses (via
+      :class:`shapegen.models.basis.RhoBasis`), since it is a measurement of a
+      continuum quantity and comparable across meshes. ~5x less accurate.
     """
-    return _cf.mobius_normalize(
-        mesh, _cf.spherical_conformal_map(mesh, iters=iters))
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {METHODS}, got {method!r}")
+    if method == "polyhedral":
+        if sphere is not None:
+            raise ValueError("method='polyhedral' computes its own exact sphere map; do not pass sphere")
+        return _encode_polyhedral(mesh, L)
+    coarse = len(mesh.faces) < REFINE_BELOW if refine == "auto" else bool(refine)
+    if sphere is not None or not coarse:
+        return _encode_on(mesh, L, sphere, maxiter, method)
+    from .geom.mesh import Mesh, remesh_isotropic
+    from .geom.resample import locate_on_mesh
+
+    work = Mesh(*remesh_isotropic(mesh.vertices, mesh.faces, REFINE_TO))
+    res = _encode_on(work, L, None, maxiter, method)
+    # the input's vertices on the remeshed surface → their sphere positions
+    idx, bary, _ = locate_on_mesh(work.vertices, work.faces, mesh.vertices)
+    sph = (res.sphere[work.faces[idx]] * bary[:, :, None]).sum(1)
+    sph /= np.linalg.norm(sph, axis=1, keepdims=True)
+    res.meta.update(err_surface=res.err, refined_mesh=work, refined_sphere=res.sphere)
+    res.sphere = sph
+    res.err = shape_error(mesh.vertices, decode(res.coeffs, sph)) if len(sph) >= 4 else float("nan")
+    return res
 
 
-def encode(mesh, L: int, sphere=None, maxiter: int = 200,
-           method: str = "residual", **kw) -> EncodeResult:
-    """``mesh → ρ̂ ∈ ℝ^((L+1)²)``.
+def _encode_on(mesh, L, sphere, maxiter, method) -> EncodeResult:
+    """:func:`encode` on a mesh fine enough to map to the sphere as it is."""
+    sph = base_sphere(mesh) if sphere is None else np.asarray(sphere, float)
+    F = mesh.faces
+    if method == "direct":
+        from .geom import spin
+        from .geom.operators import vertex_areas
 
-    Three encoders:
-
-    * ``"direct"`` — ``ρ = H·e^u − 1`` read straight off the geometry,
-      with ``e^u`` from :func:`~shapegen.geom.conformal.u_edge_lsq`. Closed-form,
-      so nothing to converge and no iteration cap to police (``niter`` is 0 and
-      means it). A measurement of a continuum quantity, so it converges under
-      refinement and stays **comparable across meshes** (per-band coefficients
-      differ 7.7% at L=4, 12.4% at L=12 between two triangulations of one
-      surface). Its accuracy is **not monotone in L** — see below.
-    * ``"residual"`` (default) — ``direct``, then **one** decode-and-re-measure
-      pass that adds what the reconstruction is still missing. Two decodes
-      instead of one. Its high bands describe the decode's shortfall rather than
-      the input's high frequencies, which is what lets bandwidth keep paying:
-      ``direct`` peaks at L=24 and turns up after, ``residual`` keeps improving.
-      A second pass adds nothing.
-
-      Measured on 6 FaceScape heads, ``remesh=0.8``, chamfer against the
-      **original** head, and separately over the face region alone (a 0.7-radius
-      ball about the nose tip, 40% of vertices — the whole-head mean is dominated
-      by the featureless cranium and neck):
-
-      .. code-block:: text
-
-           L  coeffs     gamma     direct  residual  |  face: direct  residual
-          16     289   3.5e-03    0.03431   0.03381  |       0.02366   0.02300
-          24     625   1.0e-02    0.02992   0.02868  |       0.02121   0.01982
-          32    1089   2.7e-02    0.03068   0.02640  |       0.02427   0.01918
-          40    1681   4.8e-02    0.03508   0.02598  |       0.03091   0.01927
-
-      **L=32 is the operating point.** ``residual`` beats ``direct`` at every L,
-      by 14%/21% (whole/face) at L=32 and 26%/38% at L=40. But L=40 costs 54% more
-      coefficients to buy 1.6% on the whole head and is *marginally worse* on the
-      face — the face plateaus at L=32.
-
-      Note the old "gamma under 1e-2" selection rule does **not** carry over:
-      ``residual`` is still improving at gamma 4.8e-2. That rule described
-      ``direct``'s turn-up, which is exactly what this method removes.
-    * ``"adjoint"`` — optimises decoded shape error through the adjoint. Several
-      times more accurate on a fixed mesh (0.0127 against 0.0644 on a bottle at
-      L=12) and ~26x the cost: 19 s/mesh at subdiv 3, and **321-376 s** at 26k
-      vertices. Its fit absorbs the discretisation it was fitted against, so its
-      codes are *not* comparable across meshes — the same 7.4% at L=4 becomes
-      **46.0%** at L=12.
-
-    **Why ``residual`` is the default, and not ``adjoint``.** Accuracy on one
-    fixed mesh is the wrong axis for the thing this codec exists to feed. A
-    dataset encoder has to be affordable (the adjoint puts ~9000 meshes at two to
-    three months of compute) and its codes have to mean the same thing across
-    meshes, which the adjoint's measurably do not. ``residual`` costs one extra
-    decode over ``direct`` — not 26x — and keeps ``direct``'s cross-mesh
-    comparability, because it is still a measurement of the same continuum
-    quantity, just measured twice. Reach for ``adjoint`` only when you are
-    reconstructing one known mesh as accurately as possible.
-
-    ``direct`` remains available and is what you want if you need the single-shot
-    estimator itself rather than the best reconstruction — it is the one whose
-    per-band values are a direct reading of the geometry.
-
-    The trade is real and it is not small: on a smoothed FaceScape head ``direct``
-    sits at ~0.084 *regardless of L* while the adjoint reaches 0.021. On faces
-    specifically, ρ_direct comes out 10-30x too small — ``e^u`` exponentiates the
-    error in ``u`` — and that is worth fixing before leaning on this default for
-    scanned data.
-
-    **For ``direct``, ``L`` is a regularisation parameter, not a fidelity knob** —
-    and that is a fact about *this estimator*, not about ρ̂. With ``adjoint`` the
-    error falls **monotonically** with bandwidth, as one would expect: on a
-    FaceScape head against a shared template, 0.056 (L=8) → 0.043 (L=12) → 0.035
-    (L=16), against ``direct``'s 0.092 / 0.090 / 0.088 on the same heads. Do not
-    read the paragraph below as a limit of the representation; it is a limit of a
-    biased local measurement.
-    Measured on a bottle at subdiv 3: 0.115 (L=4), **0.054 (L=8)**, 0.064 (L=12),
-    0.062 (L=16), 0.0641 (L=24) — and decoding ρ_direct with *no band limit at
-    all* gives 0.0641 to five digits. So nothing runs away; the curve converges to
-    the error of reproducing ρ_direct faithfully, and **the low-L values are
-    anomalously good rather than the high-L ones anomalously bad**. Band-limiting
-    is accidentally truncating the estimator's bias, which lives in the high
-    bands: against the shape-optimal ρ, per-band error is 0.15-0.33x for ℓ ≤ 6 and
-    1.3-11x for ℓ ≥ 8. γ says the same thing independently, rising monotonically
-    with bandwidth (1.5e-3 at L=4 to 3.7e-2 unlimited, at subdiv 4) — each extra
-    band makes ρ *less* realisable as any surface's curvature half-density.
-
-    Consequence for ``direct``: **choose L by validation, and re-choose it per
-    resolution.** The optimum moves — L=8 at subdiv 3-4, L=12 at subdiv 5 —
-    because it tracks the discretisation floor, not the shape. If you want
-    accuracy to keep improving with bandwidth, use ``adjoint``; that is the axis
-    it wins on, and it is worth 2.5x at L=16 on a face.
-
-    A third encoder, ``"lambda"`` (read λ off the correspondence, least-squares ρ
-    against the Dirac energy), was removed: ``direct`` beat it by 20-35% at every
-    bandwidth and resolution tried, at the same cost.
-
-    A base sphere is computed if none is given; pass one when encoding the same
-    mesh at several bandwidths, since the parameterisation is the expensive step.
-
-    Optimises *at* bandwidth ``L`` rather than encoding then truncating — the
-    decode is nonlinear, so the band-limited optimum is not the projection of the
-    unconstrained one, and the difference grows as L falls.
-    """
-    if method not in ("direct", "residual", "adjoint"):
-        raise ValueError(f"method must be 'direct', 'residual' or 'adjoint', "
-                         f"got {method!r}")
-    o = _enc.encode_sh(mesh, L, sph=sphere, maxiter=maxiter,
-                       optimise=(method == "adjoint"),
-                       residual=(1 if method == "residual" else 0), **kw)
-    return EncodeResult(coeffs=o["coeffs"], sphere=o["sph"], L=L, err=o["err"],
+        c0 = _enc.sh_project(spin.mesh_to_rho_direct(mesh, sph),
+                             _enc.real_sh_basis(sph, L), mass=vertex_areas(sph, F))
+        err = shape_error(mesh.vertices, decode(c0, sph))
+        return EncodeResult(coeffs=c0, sphere=sph, L=L, err=err, err0=err,
+                            niter=0, nfev=0, status="direct: measured, not optimised")
+    lift, spinor, Ls = _spectral_context(L)
+    if method == "dirac":
+        from .geom.dirac_direct import encode_dirac
+        o = encode_dirac(mesh.vertices, sph, F, L, lift=lift, Ls=Ls)
+        # positions enter only here, to score the decode (from the closing solve's
+        # own spinor: no second solve)
+        err = shape_error(mesh.vertices, _eval_sh(sph, o["f_hat"], lift.Lf))
+        return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err, err0=err, niter=0,
+                            nfev=0, gamma=o["gamma"], status="dirac: linear solves, not optimised")
+    if method == "quotient":
+        from .geom.dirac_quotient import encode_quotient
+        o = encode_quotient(mesh.vertices, sph, F, L, lift=lift, Ls=Ls)
+        err = shape_error(mesh.vertices, _eval_sh(sph, o["f_hat"], lift.Lf))
+        return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err, err0=err, niter=0,
+                            nfev=0, gamma=o["gamma"],
+                            status="quotient: pointwise Dirac quotient, not optimised")
+    from .geom import spectral_adjoint as sa
+    o = sa.encode_spectral(mesh.vertices, sph, F, L, maxiter=maxiter,
+                           lift=lift, spinor=spinor, Ls=Ls)
+    err = shape_error(mesh.vertices, decode(o["coeffs"], sph))
+    return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err,
                         err0=o["err0"], niter=o["niter"], nfev=o["nfev"],
-                        gnorm=o["gnorm"], gamma=o.get("gamma", float("nan")),
-                        status=o.get("status", ""),
-                        meta={"alpha": o.get("alpha")})
+                        gamma=o["gamma"], status=o["status"],
+                        meta={"sec_per_eval": o["sec_per_eval"], "loss_err": o["err"]})
 
 
-def decode(coeffs: np.ndarray, sphere: np.ndarray, faces: np.ndarray) -> np.ndarray:
-    """``ρ̂ → vertex positions``, on ``faces``.
+def _encode_polyhedral(mesh, L) -> EncodeResult:
+    """``method="polyhedral"``: the exact sphere map of the polyhedron itself."""
+    from .geom.poly_conformal import encode_polyhedral
 
-    Determined only up to a similarity, so compare with :func:`shape_error` and
-    never with a raw vertex distance.
-    """
-    return _enc.decode_sh(np.asarray(coeffs, float), sphere, faces)
+    lift, _spinor, Ls = _spectral_context(L)
+    o = encode_polyhedral(mesh.vertices, mesh.faces, L, lift=lift, Ls=Ls)
+    sph = o["sphere"]
+    V = np.asarray(mesh.vertices, float)
+    err = shape_error(V, _eval_sh(sph, o["f_hat"], lift.Lf)) if len(V) >= 4 else float("nan")
+    # dense score: the decode at the quadrature samples against their exact surface points
+    xs, wA, Xs = o["samples"]
+    sel = np.flatnonzero(wA > 0)
+    sel = sel[np.linspace(0, len(sel) - 1, min(len(sel), 6000)).astype(int)]
+    err_surface = shape_error(Xs[sel], _eval_sh(xs[sel], o["f_hat"], lift.Lf))
+    info = o["info"]
+    return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err, err0=err, niter=0, nfev=0,
+                        gamma=o["gamma"], status="polyhedral: exact sphere map, not optimised",
+                        meta={"err_surface": err_surface, "gauge": "cones", **info})
+
+
+_SPECTRAL_CONTEXT: dict = {}
+
+
+def _spectral_context(L):
+    """The spectral lift and spinor precomputation depend only on ``L``: built
+    once per band and reused across a dataset."""
+    from .geom import dirac_spectral as ds
+    from .geom import spectral_adjoint as sa
+
+    if L not in _SPECTRAL_CONTEXT:
+        Ls = ds.spinor_band(L, ds.potential_band_extra(L))
+        _SPECTRAL_CONTEXT.clear()
+        _SPECTRAL_CONTEXT[L] = (sa.SpectralLift(Ls), sa.SpectralSpinor(L, Ls), Ls)
+    return _SPECTRAL_CONTEXT[L]
+
+
+def decode(coeffs: np.ndarray, sphere: np.ndarray, faces=None) -> np.ndarray:
+    """``ρ̂ → positions`` at the unit directions ``sphere`` ``(n, 3)``: the spectral
+    spectral spinor and its surface solved in spherical harmonics
+    (:func:`shapegen.quad.lift.lift_spectral`). No mesh is involved; ``faces`` is
+    accepted and ignored. Defined up to a similarity -- use :func:`shape_error`."""
+    from .quad.lift import lift_spectral
+
+    coeffs = np.asarray(coeffs, float)
+    L = int(round(np.sqrt(len(coeffs)))) - 1
+    return lift_spectral(sphere, coeffs, L)[0]
+
+
+def _eval_sh(P, f_hat, L, chunk: int = 4000):
+    """Real-SH positions ``f_hat`` ``(K, 3)`` evaluated at unit directions ``P``,
+    chunked so a band-79 basis never exists for all points at once."""
+    X = np.empty((len(P), f_hat.shape[1]))
+    for i in range(0, len(P), chunk):
+        X[i:i + chunk] = _enc.real_sh_basis(P[i:i + chunk], L) @ f_hat
+    return X
 
 
 def shape_error(target: np.ndarray, X: np.ndarray) -> float:
-    """Relative Procrustes error — the quantity :func:`encode` minimises.
-
-    Invariant to rotation, translation and scale, which is required rather than
-    convenient: the decode fixes the immersion only up to a similarity, so a
-    metric that could see the difference would be measuring a gauge.
-    """
+    """Relative Procrustes error, invariant to rotation, translation and scale."""
     return float(np.sqrt(_enc.procrustes(target, X)[0]))
 
 
-def encode_dataset(meshes, L: int, method: str = "residual", sphere=None,
-                   maxiter: int = 200, n_jobs: int = 1, verbose: bool = False):
-    """Encode many meshes into a comparable code set.
+def encode_dataset(meshes, L: int, method: str = "spectral", sphere=None,
+                   maxiter: int = 300, n_jobs: int = 1, verbose: bool = False):
+    """Encode many meshes. Returns ``(coeffs (N, K), results)``.
 
-    Returns ``(coeffs (N,K), results, decode_sphere)``. **The decode sphere is
-    returned separately and deliberately**: the two methods mean different things
-    by "the sphere", and conflating them is silent rather than loud.
-
-    **``sphere`` decides the sphere policy, not ``method``.** They used to be
-    coupled — ``adjoint`` implied a shared sphere and ``direct`` a per-mesh one,
-    with a shared sphere *rejected* for ``direct``. That guard blocked the one
-    operation a generative pipeline needs most: measure a whole dataset against a
-    single template, cheaply. It was also too strong on its own evidence, since a
-    direct code decodes on a sphere it never saw at 0.5–0.9x the error it gets on
-    its own — portable, not meaningless.
-
-    ``sphere=<array>``   every mesh is encoded against that one sphere, whichever
-                         method. **This is what generation requires**: at sample
-                         time there is no mesh, so no cMCF sphere to recover.
-    ``sphere=None``      ``adjoint`` picks :func:`template_sphere` by vertex
-                         count; ``direct`` measures each mesh on its own cMCF
-                         sphere and returns a canonical decode sphere separately.
-                         Möbius normalisation (inside :func:`base_sphere`) is what
-                         makes those per-shape spheres mutually consistent, and it
-                         is not optional in that mode.
-
-    Encoding is embarrassingly parallel across meshes, so ``n_jobs > 1`` spreads
-    it over a **process** pool — NumPy/SciPy release work to BLAS but the Python
-    driving loop does not, so threads would not help. ``n_jobs=-1`` uses every
-    core. Worth it for the adjoint (tens of seconds per mesh); for ``direct`` the
-    per-mesh work is under a second and process startup can dominate, so measure
-    before assuming. Measured on 8 bottles at subdiv 3: 13.3 s serial, 4.4 s at
-    ``n_jobs=4``.
-
-    Parallel and serial codes agree to ~1e-10 relative, **not bit-for-bit** — but
-    neither do two serial runs: ARPACK's iterative eigensolve varies at 6e-11
-    between invocations, so the adjoint encoder was never bit-reproducible and the
-    pool adds nothing on top of that. ``direct`` is exactly identical either way.
+    ``sphere=None``: each mesh on its own :func:`base_sphere` (the accuracy of
+    ``spectral`` comes from each shape's own conformal map). ``sphere=<array>``:
+    every mesh against that one sphere (meshes must share its vertex count).
+    ``n_jobs > 1`` uses a process pool; results stay in input order.
     """
-    if method not in ("direct", "residual", "adjoint"):
-        raise ValueError(f"method must be 'direct', 'residual' or 'adjoint', "
-                         f"got {method!r}")
+    if method not in METHODS:
+        raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     meshes = list(meshes)
-    n = len(meshes[0].vertices)
-
-    if sphere is None and method == "adjoint":
-        # The adjoint has no per-mesh mode: its fit absorbs whatever sphere it
-        # was given, so that sphere has to be the same one every time.
-        for sub in range(1, 8):                       # match the vertex count
-            t = template_sphere(sub)
-            if len(t) == n:
-                sphere = t
-                break
-        else:
-            raise ValueError(
-                f"no icosphere has {n} vertices; pass `sphere` explicitly "
-                f"(for registered data, the cMCF sphere of the dataset's own "
-                f"template mesh is the natural choice), or remesh the inputs")
-
-    if sphere is not None:
-        per_mesh_sphere, decode_sphere = sphere, sphere
-    else:
-        per_mesh_sphere = None                        # direct, per-mesh cMCF
-        decode_sphere = _canonical_for(meshes[0])
-
     if n_jobs == 1:
-        out = []
-        for i, m in enumerate(meshes):
-            r = encode(m, L, sphere=per_mesh_sphere, maxiter=maxiter, method=method)
-            if verbose:
-                print(f"[{i + 1}/{len(meshes)}] {r}", flush=True)
-            out.append(r)
+        out = [encode(m, L, sphere=sphere, maxiter=maxiter, method=method) for m in meshes]
     else:
-        import concurrent.futures as _cf  # noqa: PLC0415
-        import os  # noqa: PLC0415
+        import concurrent.futures as _cf
+        import os
         workers = os.cpu_count() if n_jobs < 0 else n_jobs
-        args = [(m.vertices, m.faces, L, per_mesh_sphere, maxiter, method)
-                for m in meshes]
-        # Results are collected by index rather than as they complete: the codes
-        # must stay aligned with the input order or the whole set is scrambled in
-        # a way nothing downstream would notice.
+        args = [(m.vertices, m.faces, L, sphere, maxiter, method) for m in meshes]
         with _cf.ProcessPoolExecutor(max_workers=workers) as ex:
             out = list(ex.map(_encode_one, args))
-        if verbose:
-            for i, r in enumerate(out):
-                print(f"[{i + 1}/{len(meshes)}] {r}", flush=True)
-    return np.stack([r.coeffs for r in out]), out, decode_sphere
+    if verbose:
+        for i, r in enumerate(out):
+            print(f"[{i + 1}/{len(meshes)}] {r}", flush=True)
+    return np.stack([r.coeffs for r in out]), out
 
 
 def _encode_one(args):
-    """Module-level so it pickles; ``ProcessPoolExecutor`` cannot ship a closure."""
-    from .geom.mesh import Mesh  # noqa: PLC0415
+    """Module-level so it pickles for ``ProcessPoolExecutor``."""
+    from .geom.mesh import Mesh
     V, F, L, sphere, maxiter, method = args
     return encode(Mesh(V, F), L, sphere=sphere, maxiter=maxiter, method=method)
-
-
-def _canonical_for(mesh) -> np.ndarray:
-    """A decode sphere with this mesh's connectivity.
-
-    An icosphere when the vertex count matches; otherwise the cMCF sphere of the
-    mesh itself, which is a perfectly good canonical choice — the codec needs one
-    *fixed* genus-0 sphere-topology mesh, not a uniform grid. For a registered
-    dataset the natural choice is the dataset's own template mesh, and a
-    category-adapted sphere measured ~2.8x better than a uniform icosphere.
-    """
-    n = len(mesh.vertices)
-    for sub in range(1, 8):
-        t = template_sphere(sub)
-        if len(t) == n:
-            return t
-    return base_sphere(mesh)

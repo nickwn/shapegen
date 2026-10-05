@@ -4,9 +4,10 @@
 
 The shared template is the whole point. rho_hat is defined *relative to* a base
 sphere -- ``rho = H e^u - 1`` and ``e^u`` belongs to the map, not the surface --
-so codes encoded against per-shape cMCF spheres do not share a meaning, and at
-generation time there is no mesh from which to recover a sphere anyway. One fixed
-sphere for encoding, training and sampling alike.
+so codes encoded against per-shape sphere maps (``codec.base_sphere``) do not
+share a meaning, and at generation time there is no mesh from which to recover a
+sphere anyway. One fixed template sphere (``codec.template_sphere``) for
+encoding, training and sampling alike; the demo meshes share its connectivity.
 
 After encoding, the script runs the check that actually matters before training:
 fit a Gaussian to the codes, sample from it, and decode. Those samples are not in
@@ -28,7 +29,7 @@ import numpy as np
 
 from shapegen import codec
 from shapegen.data.dataset import demo_bottle_meshes
-from shapegen.eval.metrics import flip_fraction, genus
+from shapegen.eval.metrics import flip_fraction
 
 
 def validate_samples(coeffs, sphere, faces, n=12, seed=0, radii=None):
@@ -71,10 +72,11 @@ def main() -> None:
     ap.add_argument("--L", type=int, default=12, help="SH bandwidth of the latent")
     ap.add_argument("--maxiter", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--method", choices=("adjoint", "local"), default="adjoint",
-                    help="adjoint: one shared sphere, ~19 s/mesh, more accurate. "
-                         "local: per-mesh cMCF measurement, ~0.7 s/mesh, codes "
-                         "portable across discretisations")
+    ap.add_argument("--method", choices=codec.METHODS, default="direct",
+                    help="direct: rho measured and projected, milliseconds per "
+                         "mesh, comparable across meshes (what training uses). "
+                         "spectral: adjoint through the mesh-free decoder, ~5x "
+                         "more accurate, minutes per mesh")
     ap.add_argument("--out", type=str, default="reports/dataset.npz")
     args = ap.parse_args()
 
@@ -86,10 +88,9 @@ def main() -> None:
           f"L={args.L} -> {K} coefficients, method={args.method}\n")
 
     t0 = time.perf_counter()
-    coeffs, results, template = codec.encode_dataset(
-        meshes, args.L, method=args.method,
-        sphere=template if args.method == "adjoint" else None,
-        maxiter=args.maxiter, verbose=True)
+    coeffs, results = codec.encode_dataset(meshes, args.L, method=args.method,
+                                           sphere=template, maxiter=args.maxiter,
+                                           n_jobs=-1, verbose=True)
     dt = time.perf_counter() - t0
 
     errs = np.array([r.err for r in results])
@@ -101,9 +102,9 @@ def main() -> None:
     print(f"  code norms          mean {np.linalg.norm(coeffs, axis=1).mean():.3f}"
           f"  spread {np.linalg.norm(coeffs, axis=1).std():.3f}")
 
-    # Each draw costs a full decode (~4.5 s at 26k vertices), so scale the probe
-    # to the mesh rather than the dataset: 60 decodes is nothing on an icosphere
-    # and four minutes on a face.
+    # Each draw costs a full decode, which scales with the vertex count, so size
+    # the probe to the mesh: 60 decodes is nothing on a small icosphere and
+    # minutes on a face.
     big = len(meshes[0].vertices) > 5000
     v = validate_samples(coeffs, template, faces,
                          n=4 if big else 12,
@@ -117,9 +118,7 @@ def main() -> None:
     safe = [r["radius"] for r in v["rows"] if r["valid_frac"] == 1.0]
     print(f"  -> fully valid out to {max(safe):.1f} sigma"
           if safe else "  -> WARNING: folds even at the innermost radius")
-    print("     A trained model must stay inside this; validity-filter samples, or "
-          "use\n     decode_adjoint to push a folded sample back (the decoder is "
-          "differentiable).")
+    print("     A trained model must stay inside this: validity-filter samples.")
 
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(args.out, coeffs=coeffs, template=template, faces=faces,

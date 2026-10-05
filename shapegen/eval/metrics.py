@@ -1,8 +1,8 @@
 """Mesh-quality metrics.
 
-Pure NumPy/SciPy. Trimmed to what the codec and the scripts actually call — the
-generative-eval metrics (novelty/coverage, distribution overlap, per-degree power
-of a σ̂ that no longer exists) went with the models they scored.
+Pure NumPy/SciPy. For scoring a reconstruction of a scanned head use
+:func:`chamfer` against the ORIGINAL head, plus :func:`chamfer_region` about
+:func:`nose_tip` for the face.
 """
 
 from __future__ import annotations
@@ -41,33 +41,24 @@ def chamfer(A, B, scale_align=False, center=True) -> float:
     """Symmetric Chamfer (mean nearest-neighbor distance). ``scale_align``
     removes the global scale gauge (the decode fixes scale only up to |λ|²).
 
-    Unlike a Procrustes error this is **topology-free**, so it is the right metric
-    for comparing meshes with different vertex counts — a decode on an icosphere
-    against one on a cMCF sphere, say.
+    Unlike a Procrustes error this is **topology-free**, so it compares meshes
+    with different vertex counts.
 
-    **Use it whenever a pipeline change alters the mesh.** `codec.shape_error` is
-    per-vertex and can only compare meshes that share topology, which forces you
-    to score against the *resampled* target — and if the change under test also
-    moved that target, the comparison is confounded. That happened three times in
-    one session, reporting 25-32% improvements that were entirely a softer
-    reference. The rule: fix the reference to the original input and compare
-    everything to it with this function.
+    **Use it whenever a pipeline change alters the mesh.** ``codec.shape_error``
+    is per-vertex and needs shared topology, which forces scoring against the
+    *resampled* target -- and if the change under test also moved that target,
+    the comparison is confounded (this has reported 25-32% gains that were
+    entirely a softer reference). Fix the reference to the original input and
+    compare everything to it with this function.
 
-    ``scale_align`` normalises by RMS radius. It used to use the raw sums, which
-    is **vertex-count dependent** and therefore wrong for exactly the case this
-    function is otherwise good at: two unit spheres with 10242 and 40962 vertices
-    scored 0.99999 (the smaller was scaled by 2.0) instead of 0.00708. With equal
-    counts the two agree, which is why it went unnoticed.
+    ``scale_align`` normalises by RMS radius, which is vertex-count independent.
 
-    Note ``A.mean(0)`` is the vertex mean, not the area-weighted centroid, so on a
-    badly non-uniform mesh the centring is itself off — the cMCF sphere of a head
-    has 1e6x area spread and a vertex mean 0.35 from its centre. **Pass
-    ``center=False`` and centre the clouds yourself when the two have different
-    vertex distributions.** A FaceScape head carries 40% of its vertices in the
+    **Centring trap:** ``center=True`` subtracts the *vertex* mean, not the
+    area-weighted centroid. A FaceScape head carries 40% of its vertices in the
     face while its icosphere resample is uniform, so the two vertex means differ
-    enough that this default shifted them apart and reported 0.155 where the
-    area-weighted centring gives 0.0152 — a 10x error that looks like a plausible
-    number, not like a bug.
+    and this default reported 0.155 where area-weighted centring gives 0.0152 --
+    a 10x error that looks plausible. **Pass ``center=False`` and centre the
+    clouds yourself when their vertex distributions differ.**
     """
     if center:
         A = A - A.mean(0)
@@ -83,15 +74,16 @@ def nose_tip(V, r: float = 0.8):
     """The nose tip of a head, as the extreme point along the depth axis that has
     vertices *around* it.
 
-    Both ends of that axis are extreme points of a head, and picking the wrong one
-    silently scores the occiput: with FaceScape's registered topology the face
-    end had 11156 vertices within ``r`` and the cranium end 670, so a
-    face-region metric built on the wrong end covered 1% of the mesh and reported
-    a 17% improvement that was measuring the back of the skull.
+    **Trap:** both ends of the depth axis are extreme points of a head, and
+    picking the wrong one silently scores the occiput (a face metric on the wrong
+    end covered 1% of the mesh and reported a 17% gain on the back of the skull).
+    The face end is the **dense** end on FaceScape's registered topology -- 11156
+    vertices within ``r`` against 670 at the cranium end -- so the candidate with
+    more vertices around it wins. That is a property of the sampling, not a
+    hand-picked index, so it survives a change of subject; pick the tip on the
+    original registered head, whose sampling this relies on.
 
-    Choosing by local vertex count is a property of the sampling rather than a
-    hand-picked index, so it survives a change of subject. ``V`` is expected in a
-    frame where z is depth and the scale is RMS-normalised.
+    ``V`` is expected in a frame where z is depth and the scale is RMS-normalised.
     """
     V = np.asarray(V, float)
     cand = [V[np.argmax(V[:, 2])], V[np.argmin(V[:, 2])]]
@@ -103,11 +95,11 @@ def chamfer_region(A, B, centre, radius: float) -> float:
     """Chamfer restricted to points within ``radius`` of ``centre``.
 
     **A whole-head mean hides the face.** Most of a FaceScape head is bald
-    cranium and neck, which are nearly featureless and nearly identical between
-    subjects, so a mean over all of it flatters any model and — worse — moves for
-    reasons that have nothing to do with the face. Dropping ``remesh`` from 2.5%
-    to 0.8% improved the whole-head decode 8% and the face decode 0%: the entire
-    gain was cranium faceting.
+    cranium and neck, so a mean over all of it flatters any model and moves for
+    reasons unrelated to the face (a 2.5% -> 0.8% remesh improved the whole head
+    8% and the face 0%). Report this alongside the whole-head number; the face
+    numbers in this repo use ``centre=nose_tip(V)``, ``radius=0.7`` on an
+    RMS-normalised head (~40% of its vertices).
 
     Nearest neighbours are searched over the **full** other cloud and only the
     average is restricted, because masking both clouds first would invent error

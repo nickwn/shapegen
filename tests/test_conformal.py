@@ -1,15 +1,11 @@
-"""Acceptance tests for the base-sphere parameterisation.
-
-Covers what the ρ codec needs from ``conformal.py``: cMCF reaches a sphere
-and reduces conformal distortion, and the Möbius gauge fix actually centers
-the conformal barycenter. The σ̂ route this file used to cover went with the
-σ̂ stack.
-"""
+"""The base-sphere parameterisation: the eigenbasis conformal map reaches the
+round sphere and its angle distortion falls with resolution, and the Möbius
+gauge fix centres the conformal barycenter."""
 
 import numpy as np
-import pytest
 
 from shapegen.geom import conformal as cf
+from shapegen.geom.eigen_sphere import conformal_sphere
 from shapegen.geom.mesh import Mesh, ellipsoid, icosphere
 from shapegen.geom.operators import vertex_areas
 
@@ -22,62 +18,36 @@ def bumpy(sub=4):
     return Mesh(V * f[:, None], s.faces)
 
 
-def rot(ax, ang):
-    ax = np.asarray(ax, float)
-    ax = ax / np.linalg.norm(ax)
-    K = np.array([[0, -ax[2], ax[1]], [ax[2], 0, -ax[0]], [-ax[1], ax[0], 0]])
-    return np.eye(3) + np.sin(ang) * K + (1 - np.cos(ang)) * (K @ K)
-
-
-def wigner_rotate(sig, R, L):
-    """Apply the rotation ``R`` to spin-0 coefficients: the convention verified
-    against rotating the field on the grid is ``conj(D[Dindex(ℓ,m',m)])``."""
-    q = quaternionic.array.from_rotation_matrix(R)
-    W = spherical.Wigner(L)
-    D = W.D(q)
-    out = np.zeros_like(sig)
-    for l in range(2, L + 1):
-        for mp in range(-l, l + 1):
-            out[l, l + mp] = sum(
-                np.conj(D[W.Dindex(l, mp, mm)]) * sig[l, l + mm]
-                for mm in range(-l, l + 1))
-    return out
-
-
 # --------------------------------------------------------------------------- #
-# cMCF: any genus-0 mesh -> round sphere                                       #
+# The conformal map: any genus-0 mesh -> round sphere                         #
 # --------------------------------------------------------------------------- #
 
-def test_cmcf_ellipsoid_to_sphere():
+def test_ellipsoid_to_sphere():
     m = ellipsoid(4, axes=(1.0, 0.7, 0.5))
-    sph = cf.spherical_conformal_map(m)
-    r = np.linalg.norm(sph, axis=1)
-    assert r.std() < 1e-6                       # lands exactly on the unit sphere
-    assert abs(r.mean() - 1.0) < 1e-9
+    r = np.linalg.norm(conformal_sphere(m.vertices, m.faces, K=64), axis=1)
+    assert r.std() < 1e-12 and abs(r.mean() - 1.0) < 1e-12
 
 
-def test_cmcf_conformal_distortion_decreases():
-    # angle distortion of the conformal map -> 0 with resolution
-    def angle_distortion(m):
-        sph = cf.spherical_conformal_map(m)
-        F = m.faces
+def _angle_distortion(m, S):
+    F = m.faces
 
-        def angles(X):
-            a = np.zeros((len(F), 3))
-            for k in range(3):
-                i, j, l = F[:, k], F[:, (k + 1) % 3], F[:, (k + 2) % 3]
-                u = X[j] - X[i]
-                v = X[l] - X[i]
-                u /= np.linalg.norm(u, axis=1, keepdims=True)
-                v /= np.linalg.norm(v, axis=1, keepdims=True)
-                a[:, k] = np.arccos(np.clip((u * v).sum(1), -1, 1))
-            return a
-        return np.mean(np.abs(angles(m.vertices) - angles(sph)))
+    def angles(X):
+        a = np.zeros((len(F), 3))
+        for k in range(3):
+            i, j, l = F[:, k], F[:, (k + 1) % 3], F[:, (k + 2) % 3]
+            u, v = X[j] - X[i], X[l] - X[i]
+            u /= np.linalg.norm(u, axis=1, keepdims=True)
+            v /= np.linalg.norm(v, axis=1, keepdims=True)
+            a[:, k] = np.arccos(np.clip((u * v).sum(1), -1, 1))
+        return a
+    return np.mean(np.abs(angles(m.vertices) - angles(S)))
 
-    d3 = angle_distortion(bumpy(3))
-    d4 = angle_distortion(bumpy(4))
-    print(f"[conformal distortion] sub3={d3:.4f} sub4={d4:.4f}")
-    assert d4 < d3 and d4 < 0.05
+
+def test_conformal_distortion_decreases_with_resolution():
+    """Measured 0.0074 -> 0.0037 (cMCF, which this replaced: 0.0078 -> 0.0038)."""
+    d3, d4 = (_angle_distortion(m, conformal_sphere(m.vertices, m.faces, K=64))
+              for m in (bumpy(3), bumpy(4)))
+    assert d4 < 0.6 * d3 and d4 < 0.005
 
 
 # --------------------------------------------------------------------------- #
@@ -86,7 +56,8 @@ def test_cmcf_conformal_distortion_decreases():
 
 def test_mobius_normalize_centers_barycenter():
     m = bumpy(4)
-    sph = cf.spherical_conformal_map(m)
+    sph = cf.ball_automorphism(conformal_sphere(m.vertices, m.faces, K=64),
+                               np.array([0.3, -0.2, 0.1]))       # off-centre it first
     nrm = cf.mobius_normalize(m, sph)
     w = vertex_areas(m.vertices, m.faces)
     w = w / w.sum()

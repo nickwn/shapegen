@@ -1,4 +1,4 @@
-"""Acceptance tests for PLAN.md's §P4 (reduced scope): pole choice and
+"""Acceptance tests for the cone chart (reduced scope): pole choice and
 stereographic projection of cones, ported from ``s4_cones.py`` minus the
 umbilic-splitting it did before projecting (see ``shapegen/quad/cones.py``'s
 module docstring for why -- cones here come from the GL-annealed cross field,

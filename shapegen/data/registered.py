@@ -16,7 +16,6 @@ simple format and the alternative is a large dependency for one function.
 
 from __future__ import annotations
 
-import struct
 from pathlib import Path
 
 import numpy as np
@@ -130,8 +129,8 @@ def check_registered(meshes):
         raise ValueError(
             f"surface is OPEN: {len(loops)} boundary loop(s) of sizes "
             f"{sorted((len(l) for l in loops), reverse=True)}. Every stage of the "
-            f"codec assumes a closed surface — the Dirac eigensolve, the "
-            f"cotan-Poisson integration and cMCF are all undefined with boundary. "
+            f"codec assumes a closed surface — the conformal sphere map and the "
+            f"spin transform are undefined with boundary. "
             f"Run `fill_holes` first.")
     g = genus(meshes[0].vertices, F0)
     if g != 0:

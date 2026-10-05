@@ -1,9 +1,5 @@
-"""Acceptance tests for the SH encoder.
-
-The adjoint is gated in ``test_dirac_adjoint.py``; what is tested here is the
-layer on top — the basis, the objective, and that optimising actually beats the
-local encoder it starts from.
-"""
+"""The SH primitives the encoders share -- basis, projection, the Procrustes
+objective and the preconditioner -- and the direct measurement of ρ."""
 
 import numpy as np
 import pytest
@@ -11,7 +7,6 @@ import pytest
 from shapegen.geom import encode as enc
 from shapegen.geom import spin
 from shapegen.geom.mesh import icosphere
-from shapegen.geom.operators import vertex_areas
 
 
 def _sphere(sub):
@@ -98,37 +93,6 @@ def test_procrustes_is_similarity_invariant():
 # End to end                                                                  #
 # --------------------------------------------------------------------------- #
 
-def test_encode_sh_beats_its_initialiser():
-    """The whole point of the optimised encoder: it must improve on the local
-    encoder it starts from, on a real non-star-shaped mesh."""
-    from shapegen.data.dataset import demo_bottle_meshes
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    out = enc.encode_sh(mesh, L=8, maxiter=20)
-    print(f"[encode L=8] init={out['err0']:.4f} -> {out['err']:.4f} "
-          f"({out['err0'] / out['err']:.2f}x, {out['niter']} iters)")
-    assert out["err"] < out["err0"]
-    assert out["err"] < 0.6 * out["err0"]
-    assert out["coeffs"].shape == (enc.n_coeffs(8),)
-
-
-@pytest.mark.parametrize("alpha", (0.0, 0.75))
-def test_decode_sh_inverts_encode_sh(alpha):
-    """``decode_sh(encode_sh(mesh))`` reproduces the mesh to the reported error —
-    i.e. the number the encoder reports is the number you actually get back.
-
-    Parametrised over ``alpha`` because this is what catches the preconditioner
-    leaking: the optimiser works in ``u`` with ``ĉ = d ⊙ u``, and returning ``u``
-    by mistake would still look like a plausible coefficient vector, but would
-    decode to a different mesh.
-    """
-    from shapegen.data.dataset import demo_bottle_meshes
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    out = enc.encode_sh(mesh, L=8, maxiter=20, alpha=alpha)
-    X = enc.decode_sh(out["coeffs"], out["sph"], mesh.faces, L=8)
-    err = float(np.sqrt(enc.procrustes(mesh.vertices, X)[0]))
-    assert err == pytest.approx(out["err"], rel=1e-9)
-
-
 # --------------------------------------------------------------------------- #
 # Preconditioning                                                             #
 # --------------------------------------------------------------------------- #
@@ -143,38 +107,6 @@ def test_band_precond_shape_and_monotonicity():
     assert all(np.allclose(d[b == l], per_band[l]) for l in range(7))
     assert all(x < y for x, y in zip(per_band[1:], per_band[2:]))
     assert np.allclose(enc.band_precond(6, alpha=0.0), 1.0)
-
-
-def test_precond_does_not_change_the_problem():
-    """``alpha`` sets the optimiser's step metric and nothing else, so the
-    objective at the shared starting point must be identical.
-
-    Note this cannot be checked by comparing the *returned* coefficients at
-    ``maxiter=0``: scipy's L-BFGS-B still takes one step at maxiter=0 (nit=1),
-    and that step legitimately differs between metrics.
-    """
-    from shapegen.data.dataset import demo_bottle_meshes
-    mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
-    a = enc.encode_sh(mesh, L=4, maxiter=1, alpha=0.0)
-    b = enc.encode_sh(mesh, L=4, maxiter=1, alpha=0.75, sph=a["sph"])
-    assert b["err0"] == pytest.approx(a["err0"], rel=1e-12)
-
-
-def test_precond_reaches_lower_error_in_a_fixed_budget():
-    """The reason it exists: same iteration budget, materially better answer.
-
-    Measured at L=16 rather than a lower band on purpose — the gap grows with
-    bandwidth (that is the whole point), and at L=12 with a generous budget both
-    settle near the same value, which would make this a coin-flip.
-    """
-    from shapegen.data.dataset import demo_bottle_meshes
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    sph = enc.encode_sh(mesh, L=2, maxiter=1)["sph"]
-    plain = enc.encode_sh(mesh, L=16, maxiter=25, alpha=0.0, sph=sph)
-    prec = enc.encode_sh(mesh, L=16, maxiter=25, alpha=0.75, sph=sph)
-    print(f"[precond L=16, 25 iters] plain={plain['err']:.4f}  "
-          f"precond={prec['err']:.4f}  ({plain['err'] / prec['err']:.2f}x)")
-    assert prec["err"] < 0.8 * plain["err"]
 
 
 def test_direct_encoder_is_exact_on_spheres():

@@ -1,4 +1,4 @@
-"""Acceptance tests for PLAN.md's §P5: periods and the lattice solve, ported
+"""Acceptance tests for periods and the lattice solve, ported
 from ``s5_grid.py``, ``core.py`` and ``conegate.py``.
 
 The headline test (``test_solve_lattice_reproduces_p0_reference``) feeds the
@@ -70,7 +70,7 @@ def test_euclidean_mst_has_n_minus_1_edges():
 
 
 def test_select_independent_loops_gives_n_minus_2():
-    """Proved complete in PLAN.md: n-1 MST loops span the lattice with
+    """Known complete: n-1 MST loops span the lattice with
     exactly one redundancy (the affine kernel), leaving n-2 independent."""
     cones = load_ref("cones_plane")
     idx = load_ref("cone_idx")
@@ -88,7 +88,7 @@ def test_select_independent_loops_gives_n_minus_2():
 
 def test_node_count_adapts_to_the_p0_spread():
     """The P0 corpus's chart has a ~21:1 spread in cone separations --
-    exactly PLAN.md's cited pitfall ('a 16:1 spread... needed 48 nodes').
+    exactly the known pitfall (a 16:1 spread needed 48 nodes).
     Solving it at a fixed n=16 (matching s5_grid.py's literal hard-code)
     converges to a point that looks fine at n=16 (residual < 1e-12) but is
     only accurate to 2.3e-6 at n=48, failing the 1e-6 final gate -- this

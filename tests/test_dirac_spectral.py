@@ -1,13 +1,13 @@
-"""Gates for PLAN.md §P8.1, §P8.2 and §P9 -- the stable Wigner-d recurrence,
+"""Gates for the stable Wigner-d recurrence,
 half-integer degrees, and the spectral quaternionic Dirac solve.
 
 The three are one chain: the Dirac system is written in spin ±1/2 fields,
 which need half-integer ℓ and m, which need a Wigner small-d that survives
-degree 32. PLAN.md called the last of those out as a decision to take
-*before* anything in §P8/§P9, and it was still open.
+degree 32. The last of those was a decision to take before any of the
+spectral work, and it was still open.
 
-§P8.6 (the blend control ``t``) and §P8.5 (the Hopf differential it is built
-on) are deliberately not covered -- that is the curvature-alignment work, and
+The blend control ``t`` and the Hopf differential it is built on are
+deliberately not covered -- that is the curvature-alignment work, and
 it is out of scope here.
 """
 
@@ -31,7 +31,7 @@ THETA = np.linspace(0.05, np.pi - 0.05, 9)
 @pytest.mark.parametrize("L", [16, 24, 32])
 @pytest.mark.parametrize("s", [0, 2, 4])
 def test_gate_p8_1_round_trip_at_band_32(L, s):
-    """PLAN.md §P8.1's gate: round trip to 1e-12 at band 32, both ways.
+    """The Wigner-recurrence gate: round trip to 1e-12 at band 32, both ways.
 
     The sum formula this replaced managed 5.3e-8 there -- four decades short
     of the gate, at the band the whole project targets.
@@ -105,7 +105,7 @@ def test_legendre_is_the_a_equals_b_equals_zero_case():
 @pytest.mark.parametrize("s", [0.5, -0.5])
 def test_half_integer_round_trip(L, s):
     """``half_analy ∘ half_synth = id``. At L=31.5 there are 1056 modes per
-    spin -- 2112 across both, exactly PLAN.md's predicted unknown count for
+    spin -- 2112 across both, exactly the predicted unknown count for
     the Dirac solve at L=32."""
     n = len(sw.half_modes(s, L))
     rng = np.random.default_rng(0)
@@ -119,7 +119,7 @@ def test_half_integer_round_trip(L, s):
 @pytest.mark.parametrize("s,l,m", [(0.5, 0.5, 0.5), (0.5, 1.5, -0.5),
                                    (-0.5, 2.5, 1.5), (0.5, 5.5, 3.5)])
 def test_gate_p8_2_orthonormality(s, l, m):
-    """PLAN.md §P8.2's first gate, at the exact ``(s, ℓ, m)`` it names.
+    """The half-integer gate, at a half-integer ``(s, ℓ, m)``.
 
     **There is no oracle for this half.** ``spherical.Wigner(2.5)``
     constructs without complaint and then dies inside its numba kernel on
@@ -141,7 +141,7 @@ def test_gate_p8_2_orthonormality(s, l, m):
 
 @pytest.mark.parametrize("L", [5.5, 11.5])
 def test_gate_p8_2_edth_eigenvalue_ratio_is_constant(L):
-    """PLAN.md §P8.2's second gate: the ð ladder factor depends only on ℓ,
+    """The second half-integer gate: the ð ladder factor depends only on ℓ,
     never on m. At spin ∓1/2 it is exactly ``ℓ + 1/2``, which is the identity
     the Dirac operator's diagonal blocks are built from."""
     for s in (0.5, -0.5):
@@ -162,18 +162,18 @@ def test_gate_p8_2_edth_eigenvalue_ratio_is_constant(L):
 
 @pytest.mark.parametrize("L", [4, 8, 12])
 def test_gate_p9_a_round_sphere(L):
-    """**PLAN.md §P9.A, the gate it says not to proceed past.** ``ρ_repo ≡ 0``
+    """**The round-sphere gate, not to proceed past.** ``ρ_repo ≡ 0``
     must give ``γ = 0`` and a constant spinor.
 
-    This is also what pins the convention of §2.4: the round sphere is
+    This is also what pins the ρ convention: the round sphere is
     ``ρ_bundle = 1``, not 0, and the kernel condition on a constant ρ is
     ``(ℓ+1/2)² = ρ²`` -- which at ρ=1 selects ℓ=1/2 and nothing else. If the
     ``+1`` were missing or applied twice, this test would find no kernel at
     all.
     """
-    res = ds.solve_spinor(np.zeros(n_coeffs(L)), L)
+    res = ds.solve_spinor(np.zeros(n_coeffs(L)), L, with_gap=True)
     assert res.gamma < 1e-10
-    assert res.multiplicity == 2          # PLAN.md: 2, not the mesh path's 4
+    assert res.multiplicity == 2          # 2, not the mesh path's 4
     assert res.gap > 0.5                  # the kernel is cleanly separated
 
     modes = sw.half_modes(0.5, res.Ls)
@@ -182,9 +182,105 @@ def test_gate_p9_a_round_sphere(L):
     assert power[lv == 0.5].sum() / power.sum() > 1.0 - 1e-12
 
 
+@pytest.mark.parametrize("amp", [0.0, 1.0, 8.0])
+def test_lu_solve_matches_the_svd(amp):
+    """The default ``method="lu"`` (one LU + block inverse iteration) against
+    the dense SVD: same ``gamma``, same gap, same kernel *pair* (compared as a
+    subspace -- the pair is only defined up to the quaternionic gauge), at
+    the round sphere, fixture amplitude and production-like amplitude. And a
+    warm start from a nearby solve reaches the same answer."""
+    L = 10
+    rho = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)] * amp
+    Ls = ds.spinor_band(L, ds.potential_band_extra(L))
+    ref = ds.solve_spinor(rho, L, Ls=Ls, method="svd")
+    res = ds.solve_spinor(rho, L, Ls=Ls, with_gap=True)
+    assert res.gamma == pytest.approx(ref.gamma, rel=1e-10, abs=1e-13)
+    assert res.multiplicity == ref.multiplicity == 2
+    assert res.gap == pytest.approx(ref.gap, rel=1e-4)
+
+    # both vectors of the reference pair must lie in the LU solve's pair
+    G = ds.dirac_matrix(ds.rho_on_grid(rho, L, Ls), Ls, L)
+    _u, _s, vh = np.linalg.svd(G)
+    pair = vh[-2:].conj().T
+    v = np.r_[res.psi1, res.psi2]
+    assert np.linalg.norm(v - pair @ (pair.conj().T @ v)) < 1e-8
+
+    warm = ds.solve_spinor(rho * 1.01, L, Ls=Ls, v0=res)
+    cold = ds.solve_spinor(rho * 1.01, L, Ls=Ls)
+    assert warm.gamma == pytest.approx(cold.gamma, rel=1e-10, abs=1e-13)
+    assert np.isnan(cold.gap)             # not computed unless asked for
+
+
+def test_schur_solves_match_the_dense_operator():
+    """:class:`~shapegen.geom.dirac_spectral.DiracOperator` solves ``G`` and
+    ``G*`` through an ``n × n`` Schur complement; both must invert the dense
+    ``G``, and ``apply``/``apply_h`` must be it and its adjoint."""
+    L = 8
+    Ls = ds.spinor_band(L, ds.potential_band_extra(L))
+    rho = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)] * 2.0
+    op = ds.dirac_operator(ds.rho_on_grid(rho, L, Ls), Ls, L)
+    G = op.dense()
+    rng = np.random.default_rng(0)
+    b = rng.normal(size=(2 * op.n, 3)) + 1j * rng.normal(size=(2 * op.n, 3))
+    assert np.abs(op.apply(b) - G @ b).max() < 1e-12
+    assert np.abs(op.apply_h(b) - G.conj().T @ b).max() < 1e-12
+    assert np.abs(G @ op.solve(b) - b).max() < 1e-10
+    assert np.abs(G.conj().T @ op.solve_h(b[:, 0]) - b[:, 0]).max() < 1e-10
+
+
+def test_close_potential_zeroes_gamma_without_moving_the_surface():
+    """``sigma3 G`` is Hermitian and ``l = 0`` of ``rho`` shifts it by a
+    constant, so :func:`~shapegen.geom.dirac_spectral.close_potential` makes
+    ``gamma`` vanish while the spinor (and so the surface) stays put."""
+    from shapegen.geom.spectral_adjoint import SpectralLift, coef_procrustes
+
+    L = 8
+    Ls = ds.spinor_band(L, ds.potential_band_extra(L))
+    rho = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)] * 2.0
+    op = ds.dirac_operator(ds.rho_on_grid(rho, L, Ls), Ls, L)
+    Gp = np.r_[np.ones(op.n), -np.ones(op.n)][:, None] * op.dense()
+    assert np.abs(Gp - Gp.conj().T).max() < 1e-12
+    res = ds.solve_spinor(rho, L, Ls=Ls)
+    assert abs(ds.signed_gamma(res)) == pytest.approx(res.gamma, rel=1e-8)
+    closed = ds.close_potential(rho, res)
+    assert np.array_equal(closed[1:], rho[1:])
+    res2 = ds.solve_spinor(closed, L, Ls=Ls)
+    assert res2.gamma < 1e-12
+    lift = SpectralLift(Ls)
+    f1 = lift.forward(np.r_[res.psi1, res.psi2])[0]
+    f2 = lift.forward(np.r_[res2.psi1, res2.psi2])[0]
+    assert coef_procrustes(f1, f2)[0] < 1e-18
+
+
+def test_separable_synthesis_is_the_basis():
+    """:class:`~shapegen.geom.dirac_spectral.SpinorTransform` evaluates the
+    same spin-±1/2 functions as :func:`~shapegen.spectral.swsh.half_eval_basis`,
+    and ``adjoint`` is its adjoint."""
+    Ls = 7.5
+    th = np.arccos(np.polynomial.legendre.leggauss(12)[0])
+    tf = ds.SpinorTransform(Ls, th, 20)
+    TH, PH = np.meshgrid(th, 2 * np.pi * np.arange(20) / 20, indexing="ij")
+    rng = np.random.default_rng(0)
+    for s in (0.5, -0.5):
+        x = rng.normal(size=tf.n) + 1j * rng.normal(size=tf.n)
+        B = sw.half_eval_basis(s, Ls, TH.ravel(), PH.ravel())
+        assert np.abs(tf.synth(s, x).ravel() - B @ x).max() < 1e-12
+        g = rng.normal(size=TH.shape) + 1j * rng.normal(size=TH.shape)
+        assert np.vdot(g, tf.synth(s, x)) == pytest.approx(np.vdot(tf.adjoint(s, g), x))
+
+
+def test_half_eval_adjoint_is_the_basis_adjoint():
+    rng = np.random.default_rng(1)
+    th, ph = np.arccos(rng.uniform(-1, 1, 300)), rng.uniform(-np.pi, np.pi, 300)
+    g = rng.normal(size=300) + 1j * rng.normal(size=300)
+    for s in (0.5, -0.5):
+        B = sw.half_eval_basis(s, 6.5, th, ph)
+        assert np.abs(sw.half_eval_adjoint(s, 6.5, th, ph, g) - B.conj().T @ g).max() < 1e-12
+
+
 @pytest.mark.parametrize("L", [6, 10])
 def test_gate_p9_b_coupling_is_hermitian(L):
-    """PLAN.md §P9.B: catches conjugation errors in the ρ coupling, which
+    """Coupling gate: catches conjugation errors in the ρ coupling, which
     would otherwise show up only as a subtly wrong spinor."""
     rho = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(L)]
     Ls = ds.spinor_band(L)
@@ -227,7 +323,7 @@ def test_coupling_quadrature_is_exact():
 
 
 def test_gate_p9_c_branch_points():
-    """PLAN.md §P9.C: ``min|λ|`` approaching zero means the spinor vanishes
+    """Branch-point gate: ``min|λ|`` approaching zero means the spinor vanishes
     somewhere and no surface exists for that ρ. It must fall as the curvature
     is driven harder, and stay at 1 on the round sphere, where λ is
     constant."""
@@ -244,7 +340,7 @@ def test_gate_p9_c_branch_points():
 
 
 def test_gate_p9_d_converges_in_band():
-    """PLAN.md §P9.D: γ must settle as the band grows, for a ρ that is itself
+    """Band-convergence gate: γ must settle as the band grows, for a ρ that is itself
     band-limited well below it -- otherwise the solve is resolving its own
     truncation rather than the problem."""
     src = bundle_style_coeffs(L=32, power=-2.0, seed=1)
@@ -261,7 +357,7 @@ def test_gate_p9_d_converges_in_band():
 
 
 def test_gate_p9_e_conformal_factor_matches_the_mesh_solver():
-    """**PLAN.md §P9.E**, on the row that does not need a frame.
+    """**Agreement with the mesh solver**, on the row that does not need a frame.
 
     ``ψ1``/``ψ2`` are spin ±1/2, so they are not functions on the sphere and
     cannot be compared to a per-vertex quaternion field without first
@@ -269,9 +365,8 @@ def test_gate_p9_e_conformal_factor_matches_the_mesh_solver():
     against :func:`shapegen.geom.dirac.spin_transform`'s own ``|λ|²`` is a
     genuine two-discretisation check of one continuum object.
 
-    **This is what pins ``c``.** PLAN.md §2.4 leaves ``ρ_bundle = c·ρ_repo + 1``
-    open between ``c = 1`` and ``c = 2`` and says to pin it empirically, never
-    assume it. Running the spectral side at ``c = 1`` and taking the
+    **This is what pins ``c``.** ``ρ_bundle = c·ρ_repo + 1`` was open between
+    ``c = 1`` and ``c = 2``, to be pinned empirically, never assumed. Running the spectral side at ``c = 1`` and taking the
     amplitude ratio against the mesh reads it off directly: **1.0003**, flat
     across a 10x amplitude sweep. So ``c = 1``.
     """
@@ -302,7 +397,7 @@ def test_gate_p9_e_conformal_factor_matches_the_mesh_solver():
 
 
 def test_gamma_mesh_is_linear_in_gamma_spec_not_quadratic():
-    """**A correction to PLAN.md §2.5**, which predicts
+    """**A correction to an earlier prediction**, which expected
     ``γ_mesh ≈ γ_spec²`` "up to the mass normalisation" on the grounds that
     the mesh operator is a Gram operator.
 
@@ -310,7 +405,7 @@ def test_gamma_mesh_is_linear_in_gamma_spec_not_quadratic():
     3% across an 8x amplitude sweep, while ``γ_mesh/γ_spec²`` swings by 60x
     over the same range. The constant is mesh-dependent (0.0128 at subdivision
     4, 0.0033 at 5 -- it scales like 1/N, which is the mass normalisation
-    PLAN.md hedged about), so only its constancy at fixed resolution is
+    the prediction hedged about), so only its constancy at fixed resolution is
     asserted here.
     """
     L = 12
@@ -351,7 +446,7 @@ def test_dirac_potential_keeps_the_topology():
 # --------------------------------------------------------------------------- #
 
 def test_dirac_conditions_worse_on_a_conformal_quad_mesh():
-    """**Why §P7's lift still decodes on an icosphere and interpolates.**
+    """**Why the lift still decodes on an icosphere and interpolates.**
 
     Decoding directly on the quad mesh's own triangulation is tempting: 2.3x
     faster (27.2s against 62.6s at 20k faces) and it removes the
@@ -362,7 +457,7 @@ def test_dirac_conditions_worse_on_a_conformal_quad_mesh():
 
     Raw ``gamma`` cannot show this -- it scales like 1/N, so two meshes of
     different size are not comparable on it. The resolution-normalised measure
-    is PLAN.md Gate P9.E's third row: ``rho_from_lambda`` must return the
+    is the mesh-agreement gate's third row: ``rho_from_lambda`` must return the
     ``rho`` that went in. Measured on a real face at L=32::
 
         icosphere(5)          10242 v   rel err 0.0314   tri-area spread 1.2
@@ -371,7 +466,7 @@ def test_dirac_conditions_worse_on_a_conformal_quad_mesh():
 
     The quad mesh carries twice ico5's vertices and conditions *worse* than
     it. A conformal mesh cannot be uniform -- that is the same inherent area
-    spread PLAN.md §10 records -- so this is a property of the object, not a
+    spread conformal maps always have -- so this is a property of the object, not a
     bug to fix, and it is the reason the decode stays on a uniform sphere.
 
     Run small here (band 8, icosphere 3/4) so it is a regression guard rather
@@ -418,7 +513,7 @@ def test_dirac_conditions_worse_on_a_conformal_quad_mesh():
 
 
 # --------------------------------------------------------------------------- #
-# Off-grid spinor evaluation (needed by §P7 route 2)                          #
+# Off-grid spinor evaluation (needed by the lift)                             #
 # --------------------------------------------------------------------------- #
 
 def test_half_eval_basis_matches_the_grid_basis():

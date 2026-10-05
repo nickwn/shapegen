@@ -1,5 +1,5 @@
 """Acceptance tests for the spectral core (SWSH + ð ladder), restored for
-PLAN.md's quad-mesh port (§2.3, §P8.1).
+the quad-mesh port.
 
 Backend: self-contained NumPy/SciPy (the Wigner small-d sum formula), zero
 heavy deps. Independent oracle: the ``spherical`` package (Wigner / sYlm),

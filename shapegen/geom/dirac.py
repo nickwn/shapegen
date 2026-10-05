@@ -1,44 +1,32 @@
-"""Quaternionic Dirac operator and the discrete spin transform — the decode
-engine that turns a curvature change ``ρ`` into a new genus-0 immersion, including non-star-shaped shapes a radial graph cannot
-represent.
+"""Triangle-mesh quaternionic Dirac operator and discrete spin transform
+(Crane-Pinkall-Schröder, *Spin Transformations of Discrete Surfaces*).
 
-Construction (Crane–Pinkall–Schröder, *Spin Transformations of Discrete
-Surfaces*). The intrinsic Dirac operator is the face-assembled quaternionic
-matrix
+**Reference solver only.** Neither the codec nor the quad pipeline uses this
+module; they run the spectral solve in :mod:`shapegen.geom.dirac_spectral`.
+It stays as an independent implementation that tests hold the spectral path
+to (conformal factor, ``rho`` recovery, lifted surfaces).
+
+The intrinsic Dirac energy is the face-assembled quaternionic matrix
 
     X_{pq} = − (1 / 4A_f) · e_p e_q        (sum over faces f ∋ p, q)
 
-where ``e_p`` is the edge of face ``f`` opposite vertex ``p`` (a pure-imaginary
-quaternion ``V_next − V_prev``). Because the three opposite edges of a triangle
-sum to zero, every row of ``X`` sums to zero, so the constant spinor ``λ ≡ 1``
-is in its kernel — that is the ``ρ = 0 ⇒ λ ≡ 1`` identity that gates this
-module. ``X`` is quaternionic-Hermitian; we represent each quaternion by its
-real 4×4 left-multiplication matrix, making the assembled operator a real
-*symmetric* ``4|V|×4|V|`` sparse matrix and the eigenproblem a standard
-symmetric generalized one.
+with ``e_p = V_next − V_prev`` the pure-imaginary edge opposite ``p``. Edges
+of a triangle sum to zero, so ``λ ≡ 1`` is in the kernel (``ρ = 0 ⇒ λ ≡ 1``).
+Quaternions are represented by real 4×4 left-multiplication matrices, so every
+operator here is a real symmetric ``(4n, 4n)`` sparse matrix.
 
-**``X`` is the Dirac *energy*, not the Dirac operator.** Expanding the form,
-
-    λ* X λ = Σ_f |Σ_{p∈f} e_p λ_p|² / (4 A_f)  ≥ 0,
-
-so ``X = D* M_F D`` for the per-face first-order operator
-
-    (Dλ)_f = −(1/2A_f) Σ_{p∈f} e_p λ_p        [units 1/length, a curvature]
-
-and ``X`` is PSD. The curvature change ``ρ`` must therefore enter *inside* that
-norm, where it carries the edge quaternions:
+``X = D* M_F D`` for the per-face operator
+``(Dλ)_f = −(1/2A_f) Σ_{p∈f} e_p λ_p`` (units of curvature), and ``ρ`` enters
+inside the norm:
 
     E(λ) = Σ_f A_f |(Dλ)_f − (ρλ)_f|²,   (ρλ)_f = ⅓ Σ_{p∈f} ρ_p λ_p.
 
-Coupling ``ρ`` through the mass instead (``X − M·diag(ρ)``) makes it a
-1/length² quantity — off from a curvature by a factor of the Laplacian — and no
-real ``ρ`` can then satisfy ``Dλ = ρλ``. The spin transform minimizes ``E`` via
-``A(ρ) λ = γ M λ`` for the *smallest* ``γ`` (``γ ≥ 0`` is the squared Dirac
-residual; ``γ = 0`` iff ``ρ`` is realizable), then integrates the transformed
-edges ``df̃ = λ̄ df λ`` by a per-coordinate cotan-Poisson solve.
-
-:func:`rho_from_lambda` inverts this: the per-vertex ``ρ`` best explaining a
-given ``λ``, so ``mesh → λ → ρ → mesh`` round trips.
+(Trap: coupling ``ρ`` through the mass, ``X − M·diag(ρ)``, has the wrong units
+and admits no real solution.) :func:`spin_transform` minimises ``E`` as
+``A(ρ) λ = γ M λ`` for the smallest ``γ ≥ 0`` -- the *squared* residual, cf.
+the spectral ``gamma`` -- and :func:`integrate_edges` integrates
+``df̃ = λ̄ df λ`` by a cotan-Poisson solve. :func:`rho_from_lambda` is the
+inverse map, so ``mesh → λ → ρ → mesh`` round trips.
 """
 
 from __future__ import annotations
@@ -178,10 +166,9 @@ def dirac_grad_rho(V, F, rho, a, b):
     """``∂/∂ρ_v ⟨a, A(ρ) b⟩`` for quaternion fields ``a``, ``b`` — the ``∂A/∂ρ``
     contraction, returned as ``(n,)``.
 
-    This is the one ρ-dependent piece of the adjoint of the eigensolve: with a
-    cotangent ``q`` from ``(A − γM) q = Pᵀ p``, the gradient of a loss through
-    ``λ`` is ``−dirac_grad_rho(V, F, rho, q, lam)``. The sign lives at the call
-    site; this returns the plain derivative of the form.
+    With a cotangent ``q`` from ``(A − γM) q = Pᵀ p``, the gradient of a
+    loss through ``λ`` is ``−dirac_grad_rho(V, F, rho, q, lam)``; this returns
+    the plain derivative of the form.
 
     From :func:`dirac_operator`'s block, ``ρ`` enters ``A_{pq}`` three times, so
 
@@ -192,11 +179,9 @@ def dirac_grad_rho(V, F, rho, a, b):
     scattered, so the diagonal ``p = q`` — where the two linear terms cancel and
     only ``2A_f ρ_p/9`` survives — comes out right without a special case.
 
-    ``ρ`` is per-vertex P1 here, so each block sees the endpoint values directly.
-    A face-lumped stencil (``ρ_T`` = the mean over the face) would instead carry
-    an extra ⅓ chain factor per vertex; dropping it leaves the gradient direction
-    correct and the magnitude 3× off, which a cosine-only check will not catch.
-    :func:`~tests.test_dirac.test_dirac_grad_rho_matches_fd` gates the magnitude.
+    Trap: ``ρ`` is per-vertex P1; a face-lumped stencil would need an extra ⅓
+    chain factor, and missing it is 3× off in magnitude only, which a cosine
+    check will not catch (``tests/test_dirac.py`` gates the magnitude).
     """
     n = len(V)
     Af = triangle_areas(V, F)
@@ -226,8 +211,8 @@ def rho_from_lambda(V, F, lam):
 
         K_{ip} = ⅓ Σ_{f ∋ i,p} A_f ⟨λ_p, λ_i⟩,   b_i = Σ_{f ∋ i} A_f ⟨(Dλ)_f, λ_i⟩.
 
-    Unlike the old mass-coupled form there is no additive gauge: ``ρ`` is pinned
-    (a constant shift is no longer absorbed by ``γ``).
+    There is no additive gauge: a constant shift of ``ρ`` is not absorbed by
+    ``γ``.
     """
     n = len(V)
     Af = triangle_areas(V, F)
@@ -327,11 +312,8 @@ def integrate_transformed_edges(V, F, et):
     """Poisson-integrate an arbitrary per-edge field ``et`` ``(E,3)`` to vertex
     positions (mean removed).
 
-    Split out of :func:`integrate_edges` because this stage is *linear* in
-    ``et``, which is what lets the adjoint test it by a dot-product identity
-    rather than finite differences. ``X = L⁺ Gᵀ W et``: the pinned solve plus the
-    mean removal together realise the mean-zero pseudoinverse, so the composite
-    is symmetric and is its own adjoint up to ``G`` and ``W``.
+    Linear in ``et``: ``X = L⁺ Gᵀ W et``, the pinned solve plus mean removal
+    realising the mean-zero pseudoinverse.
     """
     L, _ = cotan_laplacian(V, F)
     edges, w = edge_cotan_weights(V, F)

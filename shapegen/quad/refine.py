@@ -1,80 +1,27 @@
 """Local optimisation of cone *positions*, starting from the Ginzburg-Landau
-answer (PLAN.md §P8.4's output).
+cones (:mod:`shapegen.quad.field`), minimising
+:func:`~shapegen.quad.field.area_distortion`'s energy.
 
-**This is not PLAN.md §P8.7's rejected experiment, and must not be filed
-under it later.** §P8.7 ("do not attempt", with ``whyfixed.py`` and
-``emerge.py`` behind it) is about making cones **emerge**: whether a point
-relaxation can produce the right *number* of singularities with the right
-*indices* out of a field that has none. It cannot — singularities are a
-topological fact about a section, relaxation of free points has no mechanism
-to create them, and that is precisely the job Ginzburg-Landau does and does
-correctly (8 cones, index ``+1/4`` each, sum ``+2``, every time).
+Cone count and indices are fixed; only positions move. (So this is not the
+rejected "make cones emerge by relaxation" experiment --
+topology stays with GL.) GL's placement is not a local minimum of the
+energy: a 1-degree jitter already improves the median by 8%.
 
-This module takes that verdict as given. The cone **count is fixed**, every
-cone **keeps its own index**, and the topology is never in play: all that
-moves is *where* an already-correct cone set sits. §P8.7's companion argument
-— that "the error lives in the relaxation, not the norm" — is an argument
-about which *equation* to relax, not about whether an already-topologically-
-correct placement is at the optimum of
-:func:`~shapegen.quad.field.area_distortion`. Measured, it is not: jittering
-the GL cones by 1 degree moves that score by +/-9% and *improves* the median
-by 8%, so the flow's answer is not even a local minimum of the objective the
-cones exist to serve. The plan never tested this, and it is cheap.
+Implementation: the decoded surface is cone-independent and built once
+(:func:`~shapegen.quad.field.decoded_surface`); the chart is frozen for the
+whole run. The energy is chart-free (frozen and searched poles agree to
+2e-15), so freezing buys cost (no 40 ms pole search per evaluation) and
+determinism, not correctness.
 
-**Two things make it work at all**, both of which a naive implementation gets
-wrong:
+Measured gain (paired: each cone set vs its own refinement), 468 comparisons
+over L = 12-32, amplitudes 1-8, 12 starts each: 468/468 wins on the sampled
+energy, median 1.169x, geometric mean 1.227x, range 1.021-1.881x; the gain
+grows with amplitude.
 
-1. :func:`~shapegen.quad.field.area_distortion` re-runs ``codec.decode`` on
-   every call — 97% of its cost, and it depends only on ``rho_hat``, never on
-   the cones. :func:`~shapegen.quad.field.decoded_surface` hoists it out;
-   an objective evaluation drops from 2.7 s to 1.8 ms.
-2. The chart is **frozen** for the whole optimisation and re-derived once at
-   the end, because ``area_distortion`` otherwise chooses its chart *from the
-   cones* with a 4000-sample random pole search on every call.
-
-   **Not for the reason one expects, and the expected reason is measurably
-   false.** The worry is that a pole chosen from the moving cones hops, and
-   injects a discontinuity into the objective. It does hop — walking one cone
-   0.05 rad moves the chosen pole by 3 degrees at one step and by 179 degrees
-   at another — but the energy does not notice: frozen-chart and
-   pole-searched values agree to 2e-15 relative at every sample, and the two
-   curves have the same second differences to all printed digits. The metric
-   really is chart-free. Freezing it buys **cost and determinism** instead:
-   1.1 ms per evaluation against 40 ms, and an objective that is a pure
-   function of the cone positions rather than of a random search's luck.
-
-**What it is worth, measured against the anneal's own noise floor.** Scored
-*paired* -- refine each schedule's own cones and compare like with like,
-because the unpaired numbers sit inside the schedule spread -- across 80
-(case, schedule) pairs at L=12 and L=16 and five amplitudes:
-
-* on :func:`~shapegen.quad.field.area_distortion`: **80 of 80 wins**, median
-  1.118x, geometric mean 1.136x, worst 1.016x, best 1.593x. It also *shrinks*
-  the schedule-to-schedule spread, from 1.08-1.46x per case to 1.03-1.13x --
-  different schedules land in the same basin and refinement finds its floor.
-* on the **traced quad mesh** (unweighted variance of log face area, the
-  quantity the sampled metric discretises), on 28 of those pairs: 23 of 28
-  wins, median 1.043x, geometric mean 1.059x, range 0.987x-1.179x. Every
-  trace was valid -- Euler characteristic 2, coverage 1.000000, index sum 2.
-
-**Corroborated on a much larger ensemble (2026-09-21).** The P9
-re-measurement ran 13 (bandlimit, amplitude) cases at L = 12/16/24/32 and
-amplitudes 1-8, three curvature potentials each, over 8 anneal schedules plus
-4 perturbed starts -- 468 paired (cone set, refinement) comparisons in total,
-and the refinement won **468 of 468**: median **1.169x**, geometric mean
-**1.227x**, worst **1.021x**, best **1.881x**. The original 80-pair figures
-below (median 1.118x, geometric mean 1.136x) are the low-amplitude corner of
-that; the gain grows with amplitude, and at amplitude 8 it reaches 1.5-1.9x.
-
-The traced gain is roughly a third of the sampled gain, and it is
-amplitude-dependent: 1.08-1.18x traced at amplitude 2-4, 1.00-1.02x at
-amplitude 1, and 0.99-1.00x on the round sphere, where the five losses (all
-within 1.3%) live. Part of the sampled gain is therefore being taken out of
-the sampled metric's own discretisation rather than out of the mesh -- the
-ratio traced/sampled rises from ~1.03 before refinement to ~1.09-1.13 after,
-which is the sampled metric under-predicting the refined mesh. It is still
-inside that metric's own validated agreement band (+/-15%), but it means the
-honest headline is **the traced number, not the sampled one**.
+Trap: the sampled gain overstates the mesh. On traced quad meshes (variance
+of log face area) the gain is roughly a third of it -- 1.08-1.18x at
+amplitude 2-4, ~1.0x at amplitude 1 and on the round sphere -- so quote the
+traced number.
 """
 
 from __future__ import annotations
@@ -91,13 +38,9 @@ __all__ = ["cone_frames", "objective", "refine_cones"]
 def cone_frames(P: np.ndarray):
     """An orthonormal tangent frame ``(e1, e2)`` at each unit vector in ``P``.
 
-    Cones are optimised in these *fixed* frames — ``p(u, v) = normalize(p +
-    u e1 + v e2)`` — rather than in spherical angles, which would put a
-    coordinate singularity at the poles and make the step size depend on
-    latitude, or in the chart, where the metric blows up away from the
-    origin. A fixed tangent frame makes a box constraint on ``(u, v)`` an
-    honest bound on angular motion (``|(u,v)| = tan(angle)``, so it is a
-    slight over-estimate of the angle, i.e. conservative).
+    Cones move as ``p(u, v) = normalize(p + u e1 + v e2)`` in these fixed
+    frames (no pole singularity, unlike spherical angles), so a box bound on
+    ``(u, v)`` conservatively bounds angular motion (``|(u,v)| = tan(angle)``).
     """
     P = np.asarray(P, dtype=float)
     ref = np.tile(np.array([0.0, 0.0, 1.0]), (len(P), 1))
@@ -182,13 +125,9 @@ def refine_cones(cones, rho_hat: np.ndarray, L: int, subdiv: int = 5,
       motion budget downstream: whatever slack the period solve needed at the
       start, it still has half of it.
     * **The chart is frozen** at ``pole`` (default: the pole
-      :func:`~shapegen.quad.cones.project_cones` chooses for the *initial*
-      cones) for the whole optimisation, and re-derived afterwards. Both
-      reported energies use the frozen chart, so before/after is like-for-
-      like; ``energy_rechart`` re-scores the refined set in its own freshly
-      chosen chart, and measured it equals ``energy`` to 1e-14 relative — the
-      metric is chart-free, so the freeze costs nothing and only buys speed
-      and determinism (see the module docstring).
+      :func:`~shapegen.quad.cones.project_cones` chooses for the initial
+      cones). ``energy0``/``energy`` use it; ``energy_rechart`` re-scores in a
+      freshly chosen chart (equal to ``energy`` to ~1e-14).
 
     Returns ``{"cones", "energy0", "energy", "ratio", "energy_rechart",
     "motion_deg", "max_motion_deg", "min_sep0", "min_sep", "pole", "nit",

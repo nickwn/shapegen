@@ -1,6 +1,5 @@
-"""Periods and the lattice solve (PLAN.md §P5), ported from
-``s5_grid.py``, ``core.py`` and ``conegate.py`` — "the most valuable file in
-the bundle, and self-contained."
+"""Periods and the lattice solve, ported from
+``s5_grid.py``, ``core.py`` and ``conegate.py``.
 
 Given cones in the flat chart :mod:`shapegen.quad.cones` produces (complex
 positions ``C``, indices ``idx``), this finds a cell size ``s`` and a small
@@ -9,15 +8,12 @@ of a spanning tree lands on the integer/half-integer lattice ``ℤ[i]·s`` —
 the condition a square grid needs to close up into quads without seams.
 
 The developing map's derivative is ``w' = ψ^{-1/4}`` with
-``ψ = prod_k (z - C_k)^{-4·idx_k}`` (PLAN.md §P6.1's identity), so the period
-integral between two cones has algebraic branch-point singularities at its
-own endpoints; :func:`cut_and_grad` handles that with Gauss-Jacobi quadrature
-using the *actual* endpoint exponents, which reaches machine precision at
-12-16 nodes where ordinary quadrature never converges.
+``ψ = prod_k (z - C_k)^{-4·idx_k}``, so a cone-to-cone period integral has
+branch points at its endpoints; :func:`cut_and_grad` uses Gauss-Jacobi
+quadrature with the actual endpoint exponents (machine precision at 12-16
+nodes, where ordinary quadrature never converges).
 
-**P5.3 note.** This ports the naive rounding target selection
-(``np.round(t0/s)``) only, per PLAN.md: the smarter LLL/Babai version needs
-``lll()``, which lives in a bundle file (``cvpmod.py``) that's missing.
+Target selection is naive rounding (:func:`round_to_lattice`), not LLL/Babai.
 """
 
 from __future__ import annotations
@@ -60,10 +56,10 @@ def cut_and_grad(i: int, j: int, C: np.ndarray, a: np.ndarray, n: int = 16):
     gradient w.r.t. every cone position in ``C`` (needed for Newton's method
     in :func:`solve_lattice`).
 
-    ``a = -idx`` are the per-cone exponents. Ported from ``s5_grid.py``'s
-    ``pieces`` + ``cut_and_grad`` (merged here — ``pieces`` had no other
-    caller). Verified against central finite differences to 1e-7 relative
-    (``test_quad_periods.py::test_cut_and_grad_matches_finite_differences``).
+    ``C`` are complex chart positions, ``a = -idx`` the per-cone exponents,
+    ``n`` the Gauss-Jacobi node count. Returns ``(value, grad)`` with ``grad``
+    complex of shape ``(len(C),)``. Matches central finite differences to
+    1e-7 relative.
     """
     x, w = gj_nodes(a[i], a[j], n)
     s = (1.0 + x) / 2.0
@@ -102,10 +98,11 @@ def cut_and_grad(i: int, j: int, C: np.ndarray, a: np.ndarray, n: int = 16):
 
 def euclidean_mst(C: np.ndarray):
     """Euclidean minimum spanning tree over complex points ``C`` (Prim's
-    algorithm). Frozen once and reused throughout the solve -- PLAN.md's
-    pitfall: recomputing it per iteration and rejecting when it changes
-    throws away valid solutions, since the loop set is defined by cone
-    *pairs* and the completeness proof holds for any spanning tree."""
+    algorithm); returns a list of ``(u, v)`` edges.
+
+    Trap: freeze it once per solve. Recomputing it per iteration and
+    rejecting when it changes throws away valid solutions -- the loop set is
+    defined by cone pairs and is complete for any spanning tree."""
     n = len(C)
     seen = {0}
     E = []
@@ -168,7 +165,7 @@ def realify(G: np.ndarray) -> np.ndarray:
 
 def select_independent_loops(loops, G: np.ndarray, tol: float = 1e-8):
     """Greedily keep loops whose (realified) rows are independent of every
-    loop kept so far. Proved complete in PLAN.md (not re-derived here): the
+    loop kept so far. Known to be complete (not re-derived here): the
     ``n-1`` MST edge loops span the full period lattice, and exactly one
     real-2-dimensional (one complex) redundancy is expected -- the affine
     (scale+rotation) freedom the cut integrals are blind to by
@@ -202,25 +199,16 @@ def _point_segment_distance(p: complex, a: complex, b: complex) -> float:
 
 def node_count_for(cones0: np.ndarray, loops, base: int = 16, cap_n: int = 48,
                    ratio_lo: float = 0.15, ratio_hi: float = 2.0) -> int:
-    """Derive the Gauss-Jacobi node count from the configuration's *worst*
-    segment clearance, instead of hard-coding ``s5_grid.py``'s ``n=16``.
+    """Gauss-Jacobi node count from the configuration's worst segment
+    clearance: over all loop segments, the minimum distance from any *other*
+    cone to the segment divided by the segment's length. That ratio maps
+    linearly from ``base`` nodes (ratio >= ``ratio_hi``) to ``cap_n`` (ratio
+    <= ``ratio_lo``).
 
-    PLAN.md's pitfall, reproduced on the P0 corpus: defaults tuned on evenly
-    spread cones (16 nodes) failed outright at a ~21:1 spread in cone
-    separations there, where two MST-edge segments pass within ``0.06-0.09x``
-    their own length of a third cone -- the Newton solve happily reports
-    convergence (residual < 1e-12 at 16 nodes) at a point that is only
-    accurate to ``2.3e-6`` when re-checked at 48 nodes, comfortably failing
-    the final ``1e-6`` gate. Using 48 nodes throughout recovers the
-    reference's ``2.9e-14``.
-
-    For each MST-edge segment, take the minimum distance from every *other*
-    cone to that segment, divided by the segment's own length -- a small
-    ratio means another singularity passes close to the path relative to its
-    scale, which is exactly what defeats low-order quadrature. The worst
-    (smallest) ratio across all edges maps linearly to a node count between
-    ``base`` (ratio >= ``ratio_hi``, i.e. cones evenly spread) and ``cap_n``
-    (ratio <= ``ratio_lo``).
+    Trap (silent): with a fixed 16 nodes, a segment passing within ~0.06-0.09x
+    its length of a third cone (P0 corpus) lets Newton report convergence
+    (< 1e-12) at a point that is only 2.3e-6 accurate at 48 nodes; 48 nodes
+    recover 2.9e-14.
     """
     n = len(cones0)
     worst = np.inf
@@ -246,20 +234,12 @@ def round_to_lattice(q: np.ndarray, sublattice: str = "Z[i]") -> np.ndarray:
     """Nearest lattice point to each ``q``, in ``Z[i]`` or in its index-2
     sublattice ``(1+i)Z[i] = {a+bi : a+b even}``.
 
-    **Why the sublattice option exists.** A same-index loop's period is
-    ``(1+i)`` times its cut integral, so asking only that the *periods* land
-    on ``Z[i]`` puts the cone-to-cone developed offsets on
-    ``((1-i)/2)Z[i]`` -- half of them integer, half half-integer. Both are
-    4-fold symmetry centres of the square grid, so the grid closes either
-    way, but a cone at a half-integer offset sits at a *cell centre* rather
-    than a grid vertex and :func:`shapegen.quad.grid.quad_grid` renders it as
-    a triangular face instead of a valence-3 vertex. Targeting
-    ``(1+i)Z[i]`` divides that ambiguity out and puts every cone on a grid
-    vertex, for a pure quad mesh.
-
-    It is a strictly harder condition, so it is not free: on the P0 corpus it
-    solves at cell 0.025 where ``Z[i]`` solves at 0.070, i.e. roughly 8x the
-    faces for the same surface. That is why it is not the default.
+    With ``Z[i]`` periods, cone-to-cone developed offsets land on
+    ``((1-i)/2)Z[i]``: half the cones sit at cell centres, and
+    :func:`shapegen.quad.grid.quad_grid` renders those as triangles rather
+    than valence-3 vertices. ``(1+i)Z[i]`` puts every cone on a grid vertex
+    (pure quads) but is harder: on the P0 corpus it solves at cell 0.025 vs
+    0.070, ~8x the faces. Hence ``Z[i]`` is the default.
     """
     a = np.round(q.real)
     b = np.round(q.imag)
@@ -345,10 +325,15 @@ def solve_lattice(cones0: np.ndarray, idx: np.ndarray,
     cell. See :func:`round_to_lattice` for the arithmetic and the measured
     price.
 
+    ``cones0`` are complex chart positions (:func:`~shapegen.quad.cones.project_cones`'s
+    ``z``). Sizes whose linearised predicted motion exceeds ``skip_factor x
+    cap`` are skipped without a Newton attempt.
+
     Returns a dict: ``cell`` (``None`` if nothing in ``cell_sizes`` solved),
     ``cones`` (the solved positions, or ``None``), ``gap``, ``cap`` (the
     ``0.25 x gap`` displacement budget), ``loops``, ``sel`` (the independent
-    loop indices), and ``sweep`` (per-cell-size diagnostics, for inspection).
+    loop indices), ``sweep`` (per-cell-size diagnostics) and ``n_solve``
+    (the node count from :func:`node_count_for`).
     """
     cones0 = np.asarray(cones0, dtype=complex)
     idx = np.asarray(idx, dtype=float)
@@ -397,18 +382,14 @@ def solve_lattice(cones0: np.ndarray, idx: np.ndarray,
 # --------------------------------------------------------------------------- #
 
 def conegate(C: np.ndarray, idx: np.ndarray, n: int = 40) -> np.ndarray:
-    """The cheap sanity check (``conegate.py``): accumulate the developing
-    map ``w`` at every cone along the (frozen) spanning tree, one cut
-    integral per edge, using the single-valued ``ψ = prod (z-p)^{±1}``
-    representation -- unwrap ``arg(ψ)``, never choose among four branches
-    (PLAN.md §P6.1's identity, and the evidence for it: unwrapping and
-    nearest-of-four were shown to agree in the bundle).
+    """Cheap independent check (``conegate.py``): the developing map ``w`` at
+    every cone, accumulated along the spanning tree one cut integral per
+    edge, using the single-valued ``ψ = prod (z-p)^{±1}`` with ``arg(ψ)``
+    unwrapped (no branch choice).
 
-    Valid because every cone here has index exactly ``±1/4`` (``a=∓1/4``),
-    so ``ψ`` is a plain product/quotient of linear factors and
-    ``w' = ψ^{-1/4}``. Returns ``w`` per cone (``w[0] = 0`` by construction);
-    the caller checks ``max|2w/s - round|`` for half-integer-cell agreement
-    ([verified] ``1.37e-13`` in the bundle, 17 edges).
+    Requires every index to be exactly ``±1/4``. Returns ``w`` per cone
+    (``w[0] = 0``); the caller checks ``max|2w/s - round|`` (1.37e-13 on the
+    bundle's 17-edge case).
     """
     idx = np.asarray(idx, dtype=float)
     a = -idx
