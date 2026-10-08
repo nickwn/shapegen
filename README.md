@@ -1,174 +1,256 @@
 # shapegen
 
-A **generic 3D shape generator**: turn any genus-0 surface into a fixed-length
-vector of numbers, learn a distribution over those vectors, and sample new
-shapes. Currently targeted at **faces**; nothing in the representation is
-face-specific.
+A fixed-dimensional latent representation for 3D surfaces, a generative model
+over it, and a decoder that outputs production-quality quad meshes.
 
 ```
-mesh  ──encode──▶  ρ̂ ∈ ℝ^((L+1)²)  ──generative model──▶  ρ̂'  ──decode──▶  mesh
+mesh ──encoder──▶ z ∈ ℝ^K ──flow matching──▶ z' ──decoder──▶ surface ──mesher──▶ quad mesh
+     (1) codec                (2) generative model          (1) codec      (3) mesh generation
 ```
+
+- **Codec**: an autoencoder with no learned weights. The encoder is an
+  inverse problem, the decoder is a fixed physics-style solve, and
+  K = (L+1)² (1089 at L=32).
+- **Generative model**: rectified flow over whitened codes.
+- **Mesh generation**: z → a watertight quad mesh, computed from the code
+  directly, never via a triangle mesh.
+
+The current target is faces; nothing is face-specific. The input domain is
+**genus-0 surfaces**: closed, no holes or handles (heads, bottles, cubes).
 
 ---
 
-## The idea
+## The problem with meshes as data
 
-Most 3D generative models fight the fact that meshes have no canonical
-representation — different vertex counts, different connectivity, no natural
-ordering. The usual escapes (voxels, point clouds, neural fields) each give
-something up.
+A mesh is a variable-size set of vertices plus a connectivity graph. Two scans
+of one head differ in vertex count, ordering and triangulation, so you can't
+stack them into a tensor, average them, or compute a loss between them without
+first solving correspondence. The standard workaround, **registration** to a
+template (3DMMs, FLAME), works, but it is dataset-specific and fails off the
+template's support. Voxels, point clouds and neural fields each give
+something else up: resolution, connectivity, or a guarantee of a valid surface.
 
-This takes a different route, from **discrete conformal geometry**. A theorem of
-Crane–Pinkall–Schröder says that deforming a surface by a quaternion field `λ`,
+This repo builds a representation that is:
+
+| property | |
+|---|---|
+| fixed-dimensional | K numbers regardless of input resolution |
+| correspondence-free | no registration; any triangulation in |
+| invariant to rotation, translation and scale | by construction |
+| total | **every z ∈ ℝ^K decodes to a valid surface**; there are no off-manifold codes that produce garbage |
+| self-scoring | the decoder returns a scalar residual γ measuring how exactly z is realisable |
+
+Totality is the property that matters most for generation: a sampled code can
+be imperfect, but it can't be invalid.
+
+---
+
+## 1 · Codec
+
+### The geometry, minus the jargon
+
+Every genus-0 surface can be obtained by deforming a sphere. Rather than store
+the surface, store **the deformation**. A result from discrete differential
+geometry (Crane, Pinkall & Schröder, *Spin Transformations of Discrete
+Surfaces*, SIGGRAPH 2011) says a smooth, angle-preserving deformation of the
+sphere is fully determined by **one scalar field on the sphere**, called ρ.
+Roughly, ρ is the local change in curvature.
+
+A scalar field on the sphere has a Fourier basis, the **spherical harmonics**,
+indexed by frequency ℓ. Truncating at ℓ ≤ L is a low-pass filter. The
+coefficients are the code:
 
 ```
-df̃ = λ̄ · df · λ
+z = ρ̂ ∈ ℝ^((L+1)²)
 ```
 
-produces a valid new immersion exactly when `λ` solves a Dirac equation
-`Dλ = ρλ`, where **ρ is a single scalar function** — the change in mean-curvature
-half-density, `ρ = H·e^u − 1`.
+The truncation acts as a resolution knob: L=16 → 289 dims, L=32 → 1089. Low
+frequencies are the overall head shape, and higher ones are the nose, lips and
+eyelids.
 
-So a shape is one scalar field on the sphere. Band-limit it to spherical
-harmonics and it is a **fixed-length real vector**: 169 numbers at L=12. That is
-an easy generative target — no graph structure, no permutation ambiguity, just a
-vector.
+**Decoder** `z → surface`. Solve a linear eigenproblem (the "Dirac equation")
+on the sphere for a quaternion field, then integrate it into 3D positions.
+Everything happens in the spherical-harmonic domain, so the output is a
+continuous surface you can evaluate at any point on the sphere, at any
+resolution. It is deterministic, has no parameters, and is differentiable:
+exact gradients are implemented (NumPy, not autograd), and that is what the
+default encoder optimises through.
 
-## Why this representation
+**Encoder** `mesh → z`. Map the mesh to the sphere (from its graph-Laplacian
+eigenvectors, < 1 s), then find z. There are several encoders, which are
+amortisation / accuracy trade-offs over the same inverse problem:
 
-- **No correspondence needed.** Works on unregistered meshes of any
-  triangulation. This is the whole point, and what distinguishes it from a 3DMM.
-- **Every vector decodes to a surface.** The eigensolve always returns a `λ`, so
-  the model *cannot* emit something that isn't a mesh. Most 3D representations
-  can.
-- **A free validity score.** `γ`, the Dirac residual, falls out of every decode.
-  `γ ≈ 0` means the code is exactly realisable as an immersion; large `γ` means
-  it is off-manifold. You do not have to invent a quality metric.
-- **Rotation-invariant** on a shared template — measured at 4e-15. `H` is
-  rotation-invariant and `e^u` comes from edge lengths, so rotating the input
-  leaves ρ̂ untouched.
+| method | what it is | rel. error, heads, L=32 | time |
+|---|---|---|---|
+| `spectral` (default) | L-BFGS on reconstruction loss through the decoder | 0.0050 | ~30 s |
+| `dirac` | closed form: two linear least-squares solves | 0.0069 | ~1.6 s |
+| `quotient` | cheaper closed-form approximation of `dirac` | ≈1.1× `dirac` | ~0.1 s |
+| `direct` | measure ρ from mesh curvature and project; no fitting | ~5× worse | < 1 s |
+| `polyhedral` | exact solve for low-poly / CAD inputs | — | 0.1–30 s |
 
-## Status
-
-Honest, and measured. Relative Procrustes shape error, round trip:
-
-| shape | encoder | coefficients | error |
-|---|---|---:|---:|
-| bottle, subdiv 5 | direct, own sphere | 169 (L=12) | **0.0128** |
-| bottle, subdiv 3 | adjoint, own sphere | 1089 (L=32) | **0.0041** |
-| bottle, subdiv 3 | adjoint, shared template | 1089 (L=32) | 0.0078 |
-| smoothed head | adjoint, own sphere | 1089 (L=32) | 0.0209 |
-| smoothed head | *PCA over positions* | 64 | *0.0058* |
-
-**The codec works well on smooth genus-0 shapes and is mediocre on faces.** For
-registered face data specifically, PCA over vertex positions beats it — 3.6×
-better from 17× fewer numbers. That comparison is fair and it is in this README on
-purpose. The counter-argument is that PCA needs a solved correspondence and ρ̂
-does not, so ρ̂ is the path that generalises off this dataset.
-
-The generative half is **not built yet**. See [SH_FLOW_PLAN.md](SH_FLOW_PLAN.md).
-
-## Quickstart
+Error is Procrustes-aligned (rotation/translation/scale removed), relative to
+shape size.
 
 ```python
 from shapegen import codec
-from shapegen.data.dataset import demo_bottle_meshes
 
-mesh   = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-sphere = codec.base_sphere(mesh)                          # cMCF + Möbius gauge fix
-res    = codec.encode(mesh, L=12, sphere=sphere, method="direct")
-X      = codec.decode(res.coeffs, sphere, mesh.faces)
-
-print(res.coeffs.shape)                                   # (169,)
-print(codec.shape_error(mesh.vertices, X))                # 0.0644
+res = codec.encode(mesh, L=32)                  # .coeffs (1089,), .gamma, .err
+X   = codec.decode(res.coeffs, res.sphere)
+codec.shape_error(mesh.vertices, X)
 ```
 
-Two encoders:
+### Things an ML reader should know
 
-- **`direct`** (default) — `ρ = H·e^u − 1` read straight off the geometry. Closed
-  form, 0.81 s at 2 562 vertices. Its codes are comparable across meshes, which
-  is what a dataset encoder needs.
-- **`adjoint`** — optimises decoded shape error through the adjoint of the decode.
-  Several times more accurate on a *fixed* mesh (0.0127 against 0.0644 at L=12)
-  and ~26× the cost. Its fit absorbs the discretisation it was fitted against, so
-  its codes are **not** portable — per-band coefficients differ 46% at L=12
-  between two triangulations of one surface, against `direct`'s 12%.
+- **Codes depend on the encoder.** Different encoders land on different (all
+  valid) codes for the same shape, so the code is not unique. Encode train and
+  test data with the same method, or you have a distribution shift you built
+  yourself.
+- **The sphere is a coordinate frame.** Codes are only comparable if every
+  shape is encoded against the same sphere parameterisation
+  (`codec.encode_dataset(..., sphere=template)`). At sample time there is no
+  input mesh, so this has to be fixed up front.
+- **Rate–distortion.** As pure compression, a simplified mesh beats ρ̂ above
+  ~1000 floats. The case for ρ̂ is the properties table above, not bits.
+- **Scans are noisy, and curvature amplifies noise** (it's a second
+  derivative). Light smoothing before encoding is worth ~30% on the face.
 
-**`L` is a regularisation parameter for `direct`, not a fidelity knob** — and this
-is a fact about that estimator, *not* about ρ̂. Measured on a bottle: 0.115 (L=4),
-**0.054 (L=8)**, 0.064 (L=12), 0.0641 (L=24), and decoding with no band limit at
-all also gives 0.0641. The curve converges to the error of reproducing ρ_direct
-faithfully; low L wins by accidentally truncating the estimator's bias, which lives
-in the high bands.
+---
 
-**With the adjoint, error falls monotonically with bandwidth**, as you would
-expect: on a FaceScape head against a shared template, 0.056 (L=8) → 0.043 (L=12)
-→ 0.035 (L=16), against `direct`'s 0.092 / 0.090 / 0.088. So if accuracy matters
-more than encode cost, use `adjoint` **and** raise L; with `direct`, choose L by
-validation and expect an optimum around 8-16.
+## 2 · Generative model
 
-For a dataset, `codec.encode_dataset(meshes, L, sphere=template)` encodes
-everything against **one shared sphere**, which is required for the codes to mean
-the same thing — and required outright for generation, where there is no mesh to
-recover a sphere from.
+### Setup
 
-## How it works
+Standard: whiten the codes, fit **rectified flow** (flow matching with linear
+interpolation paths), sample with 20–50 Euler steps, decode.
 
+- `VelocityField`: MLP (width 512, depth 4) with Fourier time features.
+- `train_flow` / `sample_flow`: plain MSE on the velocity target.
+- `gaussian_baseline`: fit a Gaussian to the codes and sample it, as the
+  baseline the flow has to beat.
+
+The representation sits behind a `basis` interface (`fit / encode / decode`
+on whitened codes), so the model never sees geometry:
+
+| basis | needs registration | notes |
+|---|---|---|
+| `RhoBasis` | no | the codec above |
+| `PCABasis` | yes | the 3DMM-style baseline; 0.0082 held-out at k=32 on 200 heads |
+
+```python
+from shapegen.models.basis import RhoBasis
+from shapegen.models.flow import train_flow, sample_flow
+
+basis = RhoBasis.fit(X, faces, L, sphere)
+model = train_flow(basis.encode(X))
+heads = basis.decode(sample_flow(model, n=16, k=basis.k))
 ```
-mesh ──cMCF──▶ sphere ──Möbius normalise──▶ base sphere      parameterise
-     ρ = H·e^u − 1  on that sphere                           measure
-     project onto real SH (Galerkin, area-weighted)          band-limit
-     ─────────────────────────────────────────────────────
-     A(ρ)λ = γMλ, smallest γ                                 Dirac eigensolve
-     ẽ = λ̄ e λ                                               transform edges
-     cotan-Poisson solve                                     integrate
+
+`scripts/train_faces.py` runs end to end with `--basis rho|pca`, so the
+baseline comparison stays one flag away. Its checks target the data path and
+the sample distribution, not the loss curve: a flow-matching loss is floored
+by the variance of its conditional target and says little about sample
+quality.
+
+### Status
+
+`scripts/train_faces.py` runs end to end on smoothed face scans with both
+bases. Sample-quality numbers against the Gaussian and PCA baselines are not
+yet recorded here.
+
+### What we've measured
+
+- **Sample quality is bounded by N / d_eff, not by compute.** Sample
+  dispersion (max |std − 1| in whitened space, target 0) on 340 heads:
+  0.018 at 85 samples/dim, 0.164 at 21, 0.229 at 11, 0.329 at 5.3. Tripling
+  training steps: 0.329 → 0.256. 50 → 1000 Euler steps: 0.329 → 0.298. Aim
+  for N / d_eff ≥ 20.
+- **Nominal K overstates the dimension.** Heads occupy a low-dimensional
+  submanifold of ℝ^1089, so the target is near-singular. `train_faces.py`
+  reports the participation ratio; size the model to that, not to K.
+- **Whitening is preconditioning, not cosmetics.** With an unweighted MSE,
+  unwhitened codes mean the model fits the high-variance coordinates and
+  ignores the rest.
+- **Sanity-check the latent before training.** Sample the Gaussian baseline
+  and decode. If those shapes are broken, the latent isn't safe to sample from
+  and model quality won't fix it. Totality guarantees a surface, not a
+  plausible one.
+- **Canonicalise pose.** Otherwise orientation is learned as if it were shape
+  variation.
+- **Open: train/encode mismatch.** Training currently uses `direct` codes,
+  which are consistent across meshes but ~5× less accurate than the encoders
+  recommended in part 1.
+
+---
+
+## 3 · Mesh generation
+
+### Why it is its own problem
+
+The decoder gives a continuous surface. Downstream tools (DCC packages,
+simulation, animation rigs) want a **quad mesh**: a grid of near-square
+faces, aligned to the shape, with few irregular vertices. Producing one
+normally means triangulating, then running a separate remesher. Here the quad
+mesh comes from z directly.
+
+The core constraint is topological. A square grid can't tile a closed surface
+everywhere. It needs a few **cones**: irregular vertices where 3 or 5 faces
+meet instead of 4. A cube's 8 corners are the canonical example. Cone
+placement determines mesh quality, and the grid must close up consistently
+around every loop, or you get seams.
+
+### Pipeline
+
+1. **Direction field.** Solve for a smooth field of grid directions on the
+   sphere, computed from z (a non-convex energy minimised by annealing).
+2. **Cones.** Read cone locations and types from the field's singularities.
+3. **Period solve.** A small nonlinear least-squares problem with an integer
+   target: move each cone a little so the grid's displacement around every
+   loop is a whole number of cells, which is the seam-free condition. It runs
+   at a **cell size you choose** and either converges or reports failure.
+   Rounding to the integer lattice is where that discreteness comes in.
+4. **Trace.** Walk the grid over the whole sphere and assemble faces.
+5. **Lift.** Map the grid to 3D with the codec's decoder.
+
+```python
+from shapegen.quad.pipeline import quad_mesh
+
+out = quad_mesh(z, L=32, target_faces=20000)     # or cell=<size>
+if out["ok"]:
+    out["P3"], out["faces"]
 ```
 
-The adjoint encoder differentiates that entire chain — including the eigensolve,
-whose adjoint is a singular solve requiring deflation of a 4-dimensional null
-space — and optimises ρ̂ against decoded shape error directly.
+### Status
+
+- **Watertight and closed:** Euler characteristic 2, full coverage, and no
+  irregular vertices other than the cones. Validated against the cube, where
+  the exact answer is known.
+- Face-count control within 0.4% of target at 20000.
+- About 13 s per head at L=32 (field and anneal ~6 s, trace ~4.4 s, lift ~2.5 s).
+- An option for pure quads (no triangles at cones), at a smaller cell.
+- Optional cone-position refinement for more uniform face areas.
+
+### Known limits
+
+- **The period solve can fail at a requested cell size** (~1 in 4 on
+  synthetic fixtures). Smaller cells converge more easily. There is no
+  automatic fallback; that is the caller's choice.
+- **Validity checks don't measure quality.** A degenerate anneal still yields
+  a watertight mesh with correct topology; the 3.7× difference shows up only
+  in the variance of log face areas. Gate on that.
+- Cones come only from the field, not from feature lines or sharp edges.
+
+---
 
 ## Layout
 
-| path | what |
+| part | where |
 |---|---|
-| `shapegen/codec.py` | the public API — `encode`, `decode`, `base_sphere`, `shape_error` |
-| `shapegen/geom/dirac.py` | Dirac operator, spin transform, edge integration |
-| `shapegen/geom/dirac_adjoint.py` | adjoint of the decode |
-| `shapegen/geom/encode.py` | SH basis, projection, the optimising encoder |
-| `shapegen/geom/conformal.py` | cMCF, Möbius normalisation, Gu–Yau |
-| `shapegen/data/` | demo bottles, registered-dataset loaders (FaceScape) |
-| `shapegen/models/` | flow matching over code vectors *(new, unlanded)* |
-| `scripts/` | evaluation sweeps, Willmore flow, dataset builds |
-
-## Things that are true and unobvious
-
-Each of these was measured after being assumed otherwise, and each is recorded in
-the code where it matters.
-
-- **Quasi-conformal distortion does not bound reconstruction error.** A shared
-  template with qc = 0.0665 reconstructs at 0.0078 — 8.6× *below* it. qc is a
-  pointwise anisotropy average; reconstruction error is optimised over all
-  conformal reparameterisations, and by uniformisation that family is every
-  genus-0 surface. Do not tune a parameterisation on qc.
-- **On scanned data, `H` is noise.** Two independent curvature estimators
-  disagree by **92.7%** on a raw FaceScape head and by **2.36%** on a procedural
-  bottle. `H` is a second derivative, so it amplifies scan noise by ~ℓ². Smooth
-  before encoding.
-- **ρ's flat high-ℓ spectrum is real signal, not estimator noise.** Swapping in
-  three alternative curvature estimators — including one 578× more accurate
-  pointwise on a sphere — changed the round trip by ≤2%.
-- **Check `(L+1)²` against your vertex count** before reading any spectrum. At
-  subdiv 3 a 642-vertex mesh against 625 coefficients makes a band-limit residual
-  ≈0 by construction, and it looks like a result.
-
-## A note on the name
-
-`shapegen` is historical — the project began generating bottles, which are a
-convenient non-star-shaped genus-0 test case. The goal is generic shapes, and the
-current target is faces. Renaming is pending.
+| codec | `shapegen/codec.py` (entry point), `shapegen/geom/`, `shapegen/spectral/` |
+| generative | `shapegen/models/{basis,flow}.py`, `scripts/{build_dataset,encode_faces,train_faces}.py` |
+| mesh gen | `shapegen/quad/` (entry: `pipeline.py`), `scripts/quad_demo.py` |
+| shared | `shapegen/data/`, `shapegen/eval/` |
 
 ## Requirements
 
-NumPy and SciPy for the codec; PyTorch only for `shapegen/models/`. Tests:
-`python -m pytest tests/`.
+Python ≥ 3.11: numpy, scipy, libigl, pymeshlab, torch, matplotlib. Optional:
+polyscope. Tests: `python -m pytest tests/`.
