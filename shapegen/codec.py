@@ -105,19 +105,19 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
       genus 0) and computes its conformal sphere map and spinor
       (:func:`shapegen.geom.poly_conformal.encode_polyhedral`). There is no remesh and
       no eigen sphere, so ``sphere`` and ``refine`` do not apply. The mesh is used
-      as given (no remesh, no decimation). Up to 3000 vertices the map is *exact*:
-      the start is its discrete uniformization, the fit one Newton–Krylov solve
-      over the edge periods, and the spinor quadrature closed-form; ~0.4–10 s
-      (a 2562-vertex ellipsoid: 9 s). The code depends only on the polyhedron:
-      tessellations of one cube (12 → 12288 triangles, flipped diagonals) agree to
-      the quadrature error (~1e-6), against 5e-4 – 5e-3 for the remesh path.
-      Denser meshes get the fast map (:mod:`shapegen.geom.chord_map`): the
-      discrete conformal map on the mesh's own triangulation corrected by local
-      edge periods, and a piecewise-Möbius spinor. A raw 26k-vertex FaceScape
-      head encodes in ~4 s (the exact map: ~20 min) and decodes as well
-      (L=32: vertex error 0.0684 and surface 0.0688 for both; face region
-      0.0260 vs 0.0250); a smoothed 40962-vertex icosphere-6 head in 6–7 s.
-      ``res.meta["solver"]`` says which ran.
+      as given (no remesh, no decimation), except that planar regions are
+      retriangulated from their points and non-cone vertices in them dropped, so
+      the code depends only on the polyhedron (a cube's 12-triangle, flipped
+      192-triangle and flat-subdivided meshes: identical codes). One path for every
+      mesh (:mod:`shapegen.geom.chord_map`): the discrete conformal map on the
+      mesh's triangulation corrected by edge periods (exact ones where the local
+      estimate moves the map measurably: coarse meshes), and a piecewise-Möbius
+      spinor with curved-edge corrections. On coarse meshes it is within −5 … +2 %
+      of the exact encoder (``encode_polyhedral(exact=True)``, L=16: cube, demo
+      bottle and ellipsoid at 162–2562 vertices; a spiky 9-vertex hull +13 %) in
+      0.3–2 s. A raw 26k-vertex FaceScape head encoded in ~4 s and decoded as the
+      exact map (~20 min) does (measured before the curved-edge corrections) (L=32: vertex 0.0684, surface 0.0688; face region
+      0.0260 vs 0.0250); a smoothed 40962-vertex icosphere-6 head in 7–8 s.
       Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
       they are not interchangeable with the other methods'.
       ``res.meta["err_surface"]`` scores the decode over the whole surface.

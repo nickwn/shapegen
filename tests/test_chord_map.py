@@ -1,7 +1,7 @@
 """The fast polyhedral encoder (:mod:`shapegen.geom.chord_map`): its local periods
 are the exact periods when every cone is near, its Möbius spinor is the derivative
-of its own face maps, its nodes tile the sphere, and on a dense smooth mesh its
-code is the exact encoder's."""
+of its own face maps, its nodes tile the sphere, it scores within a few percent of
+the exact encoder, and it sees the polyhedron, not the triangulation."""
 
 from __future__ import annotations
 
@@ -78,15 +78,37 @@ def test_sphere_nodes_tile_the_sphere():
     assert len(np.unique(f)) == len(F)
 
 
-def test_fast_encode_matches_the_exact_one_on_a_dense_mesh(monkeypatch):
-    """A dense smooth mesh: the fast code is the exact code to its approximation
-    (measured 3.4e-3 at 400 vertices, L=8). ``exact=None`` picks the exact map below
-    ``EXACT_MAX_VERTICES`` and the fast one above."""
-    V, F = fib_ellipsoid(400)
+def test_encode_is_near_the_exact_encoder():
+    """Scored on the exact encoder's true surface points, the encode is within a few
+    percent of it (measured at L=8: a 400-vertex ellipsoid, a flat-subdivided hull
+    +3.5 %), and its own check points are true surface points too."""
+    from shapegen import codec
+    from shapegen.geom.encode import eval_real_sh
+    from .test_poly_conformal import subdivide_flat
+
     L = 8
-    e = pc.encode_polyhedral(V, F, L)
-    assert e["info"]["solver"] == "exact"
-    monkeypatch.setattr(pc, "EXACT_MAX_VERTICES", 100)
-    c = pc.encode_polyhedral(V, F, L)
-    assert c["info"]["solver"] == "fast" and c["gamma"] < 1e-10
-    assert np.linalg.norm(c["coeffs"] - e["coeffs"]) < 1e-2 * np.linalg.norm(e["coeffs"])
+    lift, Ls = codec._spectral_context(L)
+    for V, F in (fib_ellipsoid(400), subdivide_flat(*hull_poly(), 2)):
+        e = pc.encode_polyhedral(V, F, L, lift=lift, Ls=Ls, exact=True)
+        c = pc.encode_polyhedral(V, F, L, lift=lift, Ls=Ls)
+        assert c["info"]["solver"] == "fast" and c["gamma"] < 1e-10
+        xs, _, Xs = e["samples"]
+        err = [codec.shape_error(Xs, eval_real_sh(xs, o["f_hat"], lift.Lf)) for o in (e, c)]
+        assert err[1] < 1.06 * err[0], err
+        xs, _, Xs = c["samples"]
+        assert codec.shape_error(Xs, eval_real_sh(xs, c["f_hat"], lift.Lf)) < 1.1 * err[0]
+
+
+def test_flat_reduce():
+    """A dense smooth mesh has no flat edge (nothing to reduce); a flat-subdivided
+    hull reduces to the hull, every dropped vertex located on a face that holds it."""
+    from .test_poly_conformal import subdivide_flat
+
+    assert cm.flat_reduce(*fib_ellipsoid(400)) is None
+    V0, F0 = hull_poly()
+    V, F = subdivide_flat(V0, F0, 2)
+    Vr, Fr, new, (dv, df) = cm.flat_reduce(V, F)
+    assert len(Vr) == len(V0) and len(Fr) == len(F0) and np.all(new[dv] == -1)
+    T = Vr[Fr[df]]
+    n = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+    assert np.abs(np.einsum("ij,ij->i", V[dv] - T[:, 0], n)).max() < 1e-12

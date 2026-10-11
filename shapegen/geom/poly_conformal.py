@@ -1,4 +1,4 @@
-"""Exact conformal sphere map and spinor of a polyhedron: ``codec.encode(method="polyhedral")``.
+"""Exact conformal sphere map and spinor of a polyhedron: the reference for ``codec.encode(method="polyhedral")``.
 
 A closed polyhedron is flat except at its vertices, cones of angle defect κ, so
 its conformal map to the sphere has a closed form: in a stereographic chart the
@@ -36,10 +36,13 @@ at cones within 1e-4 of an edge); the whole encode ~40 s, decoded vertex error
 0.083 (L = 16) / 0.068 (L = 32). Codes are tessellation-invariant to ~1e-6 (a hull
 vs its flat subdivisions; the projection's own floor is ~3e-7).
 
-Dense meshes (above ``EXACT_MAX_VERTICES``) go to the fast map instead
-(:mod:`~shapegen.geom.chord_map`): on the head ~4 s, 3.7e-4 rad from this map, and
-the same decode at L = 32 (vertex 0.0684, surface 0.0688; face region 0.0260
-against 0.0250).
+``codec.encode`` does not run this map: it runs the encoder of
+:mod:`~shapegen.geom.chord_map` (a discrete conformal map corrected by edge
+periods, a piecewise-Möbius spinor; on a 26k-vertex head ~4 s, 3.7e-4 rad from
+this map, and the same decode at L = 32: vertex 0.0684, surface 0.0688; face region
+0.0260 against 0.0250). This one is its reference
+(``encode_polyhedral(exact=True)``) and the source of the face development it
+scores against.
 
 Scans break three things a clean polyhedron does not: rays from the vertex-mean
 centre that leave the face (:meth:`PolyMap.develop` re-centres), edges that pass
@@ -68,7 +71,6 @@ RC = 1.2           # their check circle, in face radii: just outside the nodes (
                    # tree's block (≥ the check circle) stays small; no loss as RC > |ζ|/R_f
 HALF = 3.0         # far-field tree: the square |Re w|, |Im w| ≤ HALF of each global chart
 P_FMM = 56         # its expansion order (error ~0.64^P at a face's check circle)
-EXACT_MAX_VERTICES = 3000   # encode_polyhedral: the exact map up to here, the fast one above
 
 
 # ------------------------------------------------------------------ polyhedron data
@@ -1340,23 +1342,19 @@ def solve_map(V, F) -> PolyMap:
 
 
 def encode_polyhedral(V, F, L: int, iters: int = 3, over: int = 3, lift=None,
-                      Ls: float | None = None, n_check: int = 6000, exact: bool | None = None) -> dict:
-    """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring).
+                      Ls: float | None = None, n_check: int = 6000, exact: bool = False) -> dict:
+    """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L``.
 
     Returns ``{"coeffs", "sphere"`` (per vertex), ``"gamma", "f_hat",
     "samples": (sphere points, weights, 3D points), "map", "info"}``;
     ``samples`` are ``n_check`` points inside faces with their surface points
     under the map, to score a decode over the surface.
 
-    ``exact``: the exact map (this module) or the fast one
-    (:func:`~shapegen.geom.chord_map.encode_chord`: a discrete conformal map
-    corrected by local periods, a piecewise-Möbius spinor). ``None`` picks the
-    exact map up to ``EXACT_MAX_VERTICES`` vertices, where it takes ≲ 10 s and is
-    the better one on coarse polyhedra, and the fast one above (a 26k-vertex scan:
-    ~4 s instead of ~20 min, decoding as well).
+    The encoder is :func:`~shapegen.geom.chord_map.encode_chord` (every mesh).
+    ``exact=True`` runs this module's exact map and closed-form quadrature instead
+    (module docstring): the reference the encoder is measured against (0.1–10 s up
+    to a few thousand vertices; ~20 min on a 26k-vertex scan).
     """
-    if exact is None:
-        exact = len(V) <= EXACT_MAX_VERTICES
     if not exact:
         from .chord_map import encode_chord
 

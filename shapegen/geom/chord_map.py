@@ -1,6 +1,6 @@
-"""The fast polyhedral encode: a discrete conformal sphere map corrected by local
-periods, and a piecewise-Möbius spinor. ``codec.encode(method="polyhedral")`` on
-meshes above ``poly_conformal.EXACT_MAX_VERTICES``.
+"""The polyhedral encode, ``codec.encode(method="polyhedral")`` on every mesh: a
+discrete conformal sphere map corrected by edge periods, and a piecewise-Möbius
+spinor.
 
 The exact map (:mod:`~shapegen.geom.edge_periods`) asks every edge's period
 ``|∫ K Π_k (w − w_k)^{a_k} dw|`` along its great arc to be its 3D length. It is
@@ -9,6 +9,12 @@ This module solves a sparse model of the same equations instead and lands
 ~4e-4 rad (median) from the exact map on that head in ~4 s; the code decodes as
 well as the exact one.
 
+0. **The polyhedron.** :func:`flat_reduce` joins faces across flat edges and drops
+   vertices that are not cones (inside a planar region, or on a straight crease),
+   and triangulates each planar region from its points alone, so the code depends
+   on the polyhedron and not on its triangulation: a cube's 12-triangle, flipped
+   192-triangle and flat-subdivided meshes give the same code (to the bit; the hull
+   below and its flat subdivision: 1e-13). A mesh with no flat edge is used as it is.
 1. **Chord model.** ``log ℓ_e = log |X_i − X_j| + (u_i + u_j)/2`` on the mesh's
    own triangulation: discrete conformal equivalence (Bobenko, Pinkall &
    Springborn 2015) *without* intrinsic flips. With flips (the discrete
@@ -34,10 +40,13 @@ well as the exact one.
    and the far share is off by 1e-3 (rms, in log ρ); so when the far share moves
    the map by more than ``FAR_EXACT`` (median, one solve on the LU) the far
    correction is taken from the exact periods
-   (:meth:`~shapegen.geom.edge_periods.EdgeSystem.periods`, FMM) once, frozen,
-   with the local part re-evaluated after one step: two more steps, the map then
-   1e-6–1e-7 rad from the exact one on 162–642-vertex bottles and ellipsoids
-   (from 2e-4–9e-4). The far share moves a 41k-vertex head's map by 1.7e-5 (the
+   (:meth:`~shapegen.geom.edge_periods.EdgeSystem.lengths`, FMM), frozen, the
+   local part re-evaluated after the rows converge, and repeated until the map
+   stops moving (< 1e-7): 1e-6–1e-7 rad from the exact map on 162–642-vertex
+   bottles and ellipsoids (from 2e-4–9e-4). Where that does not settle, or
+   settles on a spurious root (unequal ``u``: a spiky 9-vertex hull, a 12-triangle
+   cube), the exact Newton–Krylov solve runs from the uniformization
+   (:meth:`~shapegen.geom.edge_periods.EdgeSystem.solve`, ≲ 1 s there). The far share moves a 41k-vertex head's map by 1.7e-5 (the
    exact correction would move it 1.3e-5, at 3–6 s), a 2562-vertex bottle's by
    8e-5: both skip it.
 3. **Spinor.** On each face the map from the sphere to the 3D triangle is the
@@ -69,19 +78,19 @@ vertices): 7–8 s per encode at L = 16 and 32 — uniformization 1.0 s, chord s
 3.7 s each under COLAMD), periods 0.7 s, code 0.7 s (L=16) / 1.4 s (L=32), check
 points 0.7 s (:func:`surface_samples`). They
 took ~62 s before uniformize's minimum-degree ordering was relabelled (53 s of it
-in SuperLU's ordering on the icosphere numbering). Smooth 2562-vertex ellipsoid:
-surface error 9.8e-5 vs 7.8e-5 exact (L=16: 2.32e-4 vs 2.24e-4), 0.9 s vs 10 s;
-codes agree to 0.2–0.7% on smooth or finely tessellated meshes (also a cube
-tessellated 12×12 per side). A 9-vertex hull flat-subdivided to 1800 vertices:
-3.23e-2 vs 3.17e-2.
+in SuperLU's ordering on the icosphere numbering).
 
-Coarse polyhedra are the exact path's (``EXACT_MAX_VERTICES``). Scored on the
-exact path's true surface points at L=16, this path is now within −5 … +2 % of
-it on a cube, a demo bottle (162 / 642 / 2562 vertices) and an ellipsoid (162 /
-642 / 2562). (The "3–12×" once measured on a cube was
-mostly the Möbius check points.) Its code still depends on the tessellation: a
-cube's 12-, 192- (flipped) and flat-subdivided triangulations differ by 9e-2
-(the exact path: 5e-6), since the Möbius spinor is per face.
+**Against the exact encoder** (:func:`~shapegen.geom.poly_conformal.encode_polyhedral`
+with ``exact=True``), both scored on its true surface points, L=16: cube 0.0107 vs
+0.0113, demo bottle (162 / 642 / 2562 vertices) 0.00624 / 0.00297 / 0.00145 vs
+0.00626 / 0.00301 / 0.00149, ellipsoid (162 / 642 / 2562) 0.00113 / 0.000315 /
+0.000213 vs 0.00111 / 0.000317 / 0.000214; 0.3–2.0 s against 0.15–7.8 s. At L=8 a box
+0.0388 vs 0.0402, a 12-gon prism 0.0324 vs 0.0323, and the spiky 9-vertex hull
+0.0670 vs 0.0594 (+13 %: its faces are large and its cones strong, the Möbius
+spinor's worst case). The codes themselves differ by 1–37 % (the spinor
+models differ); the exact encoder is tessellation-invariant to its quadrature
+error, this one through step 0. (A once-measured "3–12× the exact error on coarse
+polyhedra" was mostly the Möbius check points, now :func:`surface_samples`.)
 """
 
 from __future__ import annotations
@@ -424,9 +433,16 @@ def chord_map(V, F, log=None):
                 log(f"   exact round {rounds}: move {move:.1e}")
             if move < 1e-7:
                 break
-        if move >= 1e-7:
+        # exact rows with u = log c everywhere: unequal u is a spurious root
+        lr = np.log(es.lengths(X)) - np.log(np.linalg.norm(X[i] - X[j], axis=1))
+        uu = scales(X)
+        spread = float(uu.max() - uu.min())
+        if log:
+            log(f"   exact rounds {rounds}, u spread {spread:.1e}")
+        if move >= 1e-7 or spread > 1e-6:
             # the frozen far correction does not settle (a spiky 9-vertex hull: moves of
-            # 0.06–0.3 rad per round): the exact Newton–Krylov solve, from the uniformization
+            # 0.06–0.3 rad per round), or settles on a spurious root (the same hull,
+            # numbered otherwise): the exact Newton–Krylov solve, from the uniformization
             X, u, _ = es.solve(X_du)
             T["newton"] = True
         T["exact"] = time.perf_counter() - t
@@ -471,6 +487,15 @@ class MobiusFaces:
         M, zeta = self.M[f], pc.chart(self.Rf[f], x)
         w = (M[:, 0, 0] * zeta + M[:, 0, 1]) / (M[:, 1, 0] * zeta + M[:, 1, 1])
         return self.V[self.F[f, 0]] + w.real[:, None] * self.e1[f] + w.imag[:, None] * self.e2[f]
+
+    def sphere_points(self, P, f):
+        """Sphere points of 3D points ``P`` lying in faces ``f`` (the inverse of
+        :meth:`points`)."""
+        d = P - self.V[self.F[f, 0]]
+        w = np.einsum("ij,ij->i", d, self.e1[f]) + 1j * np.einsum("ij,ij->i", d, self.e2[f])
+        M = self.M[f]
+        zeta = (M[:, 1, 1] * w - M[:, 0, 1]) / (M[:, 0, 0] - M[:, 1, 0] * w)
+        return np.einsum("nji,nj->ni", self.Rf[f], pc._unstereo(zeta))
 
     def spinor(self, x, f):
         """λ (quaternion, sign arbitrary per point) at sphere points ``x`` in faces ``f``:
@@ -602,6 +627,175 @@ def lune_nodes(mf, X, F, Ls: float, nmax: int = 8):
     return np.concatenate(xs), np.concatenate(ws), np.concatenate(fs)
 
 
+def _ear_clip(P2, P3):
+    """A triangulation of the simple polygon ``P2`` (k, 2; counter-clockwise) that
+    depends only on its points: repeatedly cut the ear with the largest smallest
+    angle, ties to the apex whose 3D position ``P3`` is lexicographically first.
+    Returns index triples, or None if no ear is found."""
+    idx = list(range(len(P2)))
+    tris = []
+    key = np.lexsort(np.round(P3, 9).T[::-1])
+    rank = np.empty(len(P2), int)
+    rank[key] = np.arange(len(P2))
+    while len(idx) > 3:
+        best, bq = None, None
+        k = len(idx)
+        for c in range(k):
+            a, b, d = idx[c - 1], idx[c], idx[(c + 1) % k]
+            u, v = P2[a] - P2[b], P2[d] - P2[b]
+            area = u[0] * v[1] - u[1] * v[0]
+            if area >= -1e-14 * (np.hypot(*u) * np.hypot(*v)):   # reflex or straight apex
+                continue
+            T = P2[[a, b, d]]
+            inside = False
+            for o in idx:
+                if o in (a, b, d):
+                    continue
+                w = [((T[(s + 1) % 3, 0] - T[s, 0]) * (P2[o, 1] - T[s, 1])
+                      - (T[(s + 1) % 3, 1] - T[s, 1]) * (P2[o, 0] - T[s, 0])) for s in range(3)]
+                if min(w) >= -1e-14 or max(w) <= 1e-14:
+                    inside = True
+                    break
+            if inside:
+                continue
+            L_ = [np.hypot(*(T[(s + 1) % 3] - T[s])) for s in range(3)]
+            ang = [np.arccos(np.clip((L_[s] ** 2 + L_[(s + 2) % 3] ** 2 - L_[(s + 1) % 3] ** 2)
+                                     / (2 * L_[s] * L_[(s + 2) % 3]), -1, 1)) for s in range(3)]
+            q = (round(min(ang), 9), -rank[b])
+            if bq is None or q > bq:
+                best, bq = c, q
+        if best is None:
+            return None
+        tris.append((idx[best - 1], idx[best], idx[(best + 1) % k]))
+        idx.pop(best)
+    tris.append(tuple(idx))
+    return tris
+
+
+def flat_reduce(V, F, tol: float = 1e-9):
+    """The polyhedron behind the triangulation ``(V, F)``: faces joined across flat
+    edges (dihedral angle < ``tol``) into planar regions, vertices that are not
+    cones (angle defect < ``tol``) dropped where they are inside a region or on a
+    straight crease between two, and every region with more than one triangle (or a
+    dropped corner) triangulated anew by :func:`_ear_clip`, from its points alone.
+    So a cube's triangulations (12 triangles, flipped grids, flat subdivisions) all
+    reduce to the same 12 triangles. Regions whose boundary is not one simple loop
+    keep their triangles and vertices.
+
+    Returns ``None`` when nothing is flat (a scan, a smooth mesh), else
+    ``(Vr, Fr, new, (dropped, face))``: vertices in a canonical (lexicographic)
+    order, ``new[v]`` the index of input vertex ``v`` in ``Vr`` (−1 if dropped), and
+    for each dropped vertex the face of ``Fr`` it lies on."""
+    import scipy.sparse.csgraph as csg
+
+    V, F = np.asarray(V, float), np.asarray(F)
+    n, m = len(V), len(F)
+    Nf = np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]])
+    Nf /= np.linalg.norm(Nf, axis=1, keepdims=True)
+    fe, ke = np.repeat(np.arange(m), 3), np.tile(np.arange(3), m)
+    a_, b_ = F[fe, ke], F[fe, (ke + 1) % 3]
+    fwd = a_ * n + b_
+    o = np.argsort(fwd)
+    tw = o[np.searchsorted(fwd[o], b_ * n + a_)]                    # twin half-edge
+    ft = fe[tw]
+    flat = (np.einsum("ij,ij->i", Nf[fe], Nf[ft]) > 0) & (np.linalg.norm(np.cross(Nf[fe], Nf[ft]), axis=1) < tol)
+    if not flat.any():
+        return None
+    G = sp.coo_matrix((np.ones(flat.sum()), (fe[flat], ft[flat])), shape=(m, m))
+    _, reg = csg.connected_components(G, directed=False)
+    # corner angles, angle sum per (vertex, region)
+    ang = np.zeros((m, 3))
+    for c in range(3):
+        u_, w_ = V[F[:, (c + 1) % 3]] - V[F[:, c]], V[F[:, (c + 2) % 3]] - V[F[:, c]]
+        ang[:, c] = np.arctan2(np.linalg.norm(np.cross(u_, w_), axis=1), np.einsum("ij,ij->i", u_, w_))
+    defect = 2 * np.pi - np.bincount(F.ravel(), ang.ravel(), n)
+    R = reg.max() + 1
+    vr = F.ravel() * R + np.repeat(reg, 3)
+    uvr, inv = np.unique(vr, return_inverse=True)
+    sums = np.bincount(inv, ang.ravel())
+    nreg = np.bincount(uvr // R, minlength=n)
+    straight = np.ones(n, bool)
+    np.logical_and.at(straight, uvr // R, np.abs(sums - np.pi) < tol)
+    drop = (np.abs(defect) < tol) & ((nreg == 1) | ((nreg == 2) & straight))
+    bnd = reg[fe] != reg[ft]                                       # region boundary half-edges
+    hb = np.flatnonzero(bnd)
+    hb = hb[np.argsort(reg[fe[hb]], kind="stable")]
+    hptr = np.r_[0, np.cumsum(np.bincount(reg[fe[hb]], minlength=R))]
+    size = np.bincount(reg, minlength=R)
+    fo_ = np.argsort(reg, kind="stable")
+    fptr = np.r_[0, np.cumsum(size)]
+    frozen = np.zeros(R, bool)
+    for _ in range(10):                                            # until the kept regions are consistent
+        touched = np.zeros(R, bool)
+        touched[reg[np.any(drop[F], 1)]] = True
+        newF, gone = [], []
+        for r in np.flatnonzero(((size > 1) | touched) & ~frozen):
+            h = hb[hptr[r]:hptr[r + 1]]
+            nxt = dict(zip(a_[h].tolist(), b_[h].tolist()))
+            loop = []
+            if len(nxt) == len(h) and len(h):
+                v0 = v = int(a_[h[0]])
+                while True:
+                    loop.append(v)
+                    v = nxt[v]
+                    if v == v0 or len(loop) > len(h):
+                        break
+            tris = None
+            if len(loop) == len(h) and len(h):
+                fr = fo_[fptr[r]:fptr[r + 1]]
+                poly = np.array([v for v in loop if not drop[v]])
+                e1 = V[poly[1]] - V[poly[0]]
+                e1 /= np.linalg.norm(e1)
+                e2 = np.cross(Nf[fr[0]], e1)
+                tris = _ear_clip(np.c_[(V[poly] - V[poly[0]]) @ e1, (V[poly] - V[poly[0]]) @ e2], V[poly])
+            if tris is None:                   # not one simple loop: the region stays as it is
+                frozen[r] = True
+                continue
+            gone.append(fr)
+            newF.append((fr.min(), [poly[list(t)] for t in tris]))
+        drop_ = drop.copy()
+        drop_[F[frozen[reg]].ravel()] = False                      # frozen regions keep their vertices
+        if np.array_equal(drop_, drop):
+            break
+        drop = drop_
+    keep_face = np.ones(m, bool)
+    if gone:
+        keep_face[np.concatenate(gone)] = False
+    if not newF:
+        return None
+    keepv = np.flatnonzero(~drop)
+    order = keepv[np.lexsort(np.round(V[keepv], 9).T[::-1])]
+    new = np.full(n, -1)
+    new[order] = np.arange(len(order))
+    # the input's face order, a region's new triangles where its first face was (a dense
+    # mesh with a few flat pairs keeps its order, and so its check faces)
+    pieces = [(f, new[F[f]][None]) for f in np.flatnonzero(keep_face)]
+    for f, tris in newF:
+        Fn = new[np.array(tris, int)]
+        Fn = Fn[np.arange(len(Fn))[:, None], (np.argmin(Fn, 1)[:, None] + np.arange(3)) % 3]
+        pieces.append((f, Fn[np.lexsort(Fn.T[::-1])]))
+    pieces.sort(key=lambda p_: p_[0])
+    Fr = np.concatenate([p_[1] for p_ in pieces])
+    isnew = np.concatenate([np.full(len(p_[1]), not keep_face[p_[0]]) for p_ in pieces])
+    Vr = V[order]
+    # each dropped vertex: a face of Fr in its region containing it
+    dv = np.flatnonzero(drop)
+    dface = np.zeros(len(dv), int)
+    if len(dv):                                # (they lie in new triangles)
+        cand = np.flatnonzero(isnew)
+        T = Vr[Fr[cand]]
+        Nr = np.cross(T[:, 1] - T[:, 0], T[:, 2] - T[:, 0])
+        A2 = np.linalg.norm(Nr, axis=1)
+        Nr /= A2[:, None]
+        for q, v in enumerate(dv):
+            bary = np.stack([np.einsum("ij,ij->i", np.cross(T[:, (c + 1) % 3] - V[v], T[:, (c + 2) % 3] - V[v]), Nr)
+                             for c in range(3)], 1) / A2[:, None]
+            off = np.abs(np.einsum("ij,ij->i", V[v] - T[:, 0], Nr))
+            score = np.where(off < 1e-9 * (1 + np.abs(V).max()), bary.min(1), -np.inf)
+            dface[q] = cand[int(np.argmax(score))]
+    return Vr, Fr, new, (dv, dface)
+
+
 def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: float | None = None,
                  n_check: int = 6000) -> dict:
     """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring). Returns the
@@ -615,6 +809,9 @@ def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: flo
     from .spin import align_signs
 
     V, F = np.asarray(V, float), np.asarray(F)
+    V0, red = V, flat_reduce(V, F)
+    if red is not None:
+        V, F, new, (dv, dface) = red
     X, info = chord_map(V, F)
     t = time.perf_counter()
     a_v = -pc.angle_defects(V, F) / (2 * np.pi)
@@ -644,7 +841,14 @@ def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: flo
     fs = np.unique(np.linspace(0, len(F) - 1, max(1, min(len(F), n_check // 3))).astype(int))
     xc, Xc, nbad = surface_samples(V, F, X, fs)
     info["times"]["samples"] = time.perf_counter() - t
-    info.update(solver="fast", nodes=len(xs), sphere_weight=float(w.sum()), sample_faces_dropped=nbad)
+    info.update(solver="fast", nodes=len(xs), sphere_weight=float(w.sum()), sample_faces_dropped=nbad,
+                reduced=None if red is None else (len(V), len(F)))
+    if red is not None:                         # the input's vertices: kept ones, dropped ones by their face's map
+        Xin = np.zeros((len(V0), 3))
+        Xin[new >= 0] = X[new[new >= 0]]
+        if len(dv):
+            Xin[dv] = mf.sphere_points(V0[dv], dface)
+        X = Xin
     return {"coeffs": rho, "sphere": X, "gamma": gamma,
             "f_hat": lift.forward(np.r_[res.psi1, res.psi2])[0],
             "samples": (xc, np.ones(len(xc)), Xc), "map": mf, "info": info}
