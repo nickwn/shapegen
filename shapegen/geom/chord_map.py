@@ -30,7 +30,16 @@ well as the exact one.
    update and one more Newton step (GMRES on the second LU: the corrected rows
    have the same Jacobian) take the head's map from 1e-3 to 3.7e-4 rad and a smooth
    2562-vertex ellipsoid's from 1e-3 to 4e-5 (the far share alone: 5e-4 → 4e-5);
-   more updates gain nothing.
+   more local updates gain nothing. On coarse meshes the far cones are not far
+   and the far share is off by 1e-3 (rms, in log ρ); so when the far share moves
+   the map by more than ``FAR_EXACT`` (median, one solve on the LU) the far
+   correction is taken from the exact periods
+   (:meth:`~shapegen.geom.edge_periods.EdgeSystem.periods`, FMM) once, frozen,
+   with the local part re-evaluated after one step: two more steps, the map then
+   1e-6–1e-7 rad from the exact one on 162–642-vertex bottles and ellipsoids
+   (from 2e-4–9e-4). The far share moves a 41k-vertex head's map by 1.7e-5 (the
+   exact correction would move it 1.3e-5, at 3–6 s), a 2562-vertex bottle's by
+   8e-5: both skip it.
 3. **Spinor.** On each face the map from the sphere to the 3D triangle is the
    Möbius transformation through its three corners (:class:`MobiusFaces`):
    discretely conformal triangles are related by exactly that, and neighbouring
@@ -67,9 +76,9 @@ tessellated 12×12 per side). A 9-vertex hull flat-subdivided to 1800 vertices:
 3.23e-2 vs 3.17e-2.
 
 Coarse polyhedra are the exact path's (``EXACT_MAX_VERTICES``). Scored on the
-exact path's true surface points at L=16, this path is now within −5 … +11 % of
-it on a cube, a demo bottle (162 / 642 vertices) and an ellipsoid (162 / 642;
-the +11 % is the map's local periods). (The "3–12×" once measured on a cube was
+exact path's true surface points at L=16, this path is now within −5 … +2 % of
+it on a cube, a demo bottle (162 / 642 / 2562 vertices) and an ellipsoid (162 /
+642 / 2562). (The "3–12×" once measured on a cube was
 mostly the Möbius check points.) Its code still depends on the tessellation: a
 cube's 12-, 192- (flipped) and flat-subdivided triangulations differ by 9e-2
 (the exact path: 5e-6), since the Möbius spinor is per face.
@@ -91,6 +100,7 @@ NQ = 3          # Gauss(–Jacobi) nodes per panel of the local periods (8e-6 in
 SEP = 1.0       # panels: every near cone but the end's own ≥ SEP panel lengths away
 GMRES_TOL, GMRES_MAX = 1e-3, 20
 FAR_BAND = 16           # the far cones' smooth field: band (and heat taper) of its expansion
+FAR_EXACT = 1e-4        # exact periods once the far share moves the map more than this (median, rad)
 
 
 # ------------------------------------------------------------------ local periods
@@ -250,9 +260,9 @@ def far_log_ratio(X, E, a, Anear, B: int = FAR_BAND):
 
 
 def _periods(X, es):
-    """``log ρ_e`` (local + far) for the rows of ``es``."""
+    """``log ρ_e`` for the rows of ``es``: its local part and the far cones' share."""
     lr, Anear = local_log_ratio(X, es.E, es.a_v, *near_sets(es.E, es.n))
-    return lr + far_log_ratio(X, es.E, es.a_v, Anear)
+    return lr, far_log_ratio(X, es.E, es.a_v, Anear)
 
 
 # ------------------------------------------------------------------ the map
@@ -368,13 +378,28 @@ def chord_map(V, F, log=None):
     X, u = step(X, u, lu2, False)
     T["chord"] = time.perf_counter() - t
     t = time.perf_counter()
-    lr = _periods(X, es)
+    loc, far = _periods(X, es)
+    lr = loc + far
     T["periods"] = time.perf_counter() - t
     t = time.perf_counter()
     X, u = step(X, scales(X), lu2, True)
     T["correct"] = time.perf_counter() - t
+    # How far the far share alone moves the map (one solve on the LU): its approximation
+    # error moves it 0.1–0.75× as much (measured), so only then are exact periods worth it
+    y = lu2.solve(np.r_[far, np.zeros(6)])
+    far_move = float(np.median(np.hypot(y[:es.n], y[es.n:2 * es.n])))
+    exact = far_move > FAR_EXACT
+    if exact:
+        t = time.perf_counter()
+        D = np.log(np.abs(es.periods(X))) - np.log(np.linalg.norm(X[i] - X[j], axis=1)) - sum(_periods(X, es))
+        lr = lr + D
+        X, u = step(X, scales(X), lu2, True)
+        lr = sum(_periods(X, es)) + D            # the far correction frozen, the local part at X
+        X, u = step(X, scales(X), lu2, True)
+        T["exact"] = time.perf_counter() - t
     r = resid(X, u)
-    return X, dict(times=T, rms=float(np.sqrt(np.mean(r ** 2))), max=float(np.abs(r).max()))
+    return X, dict(times=T, rms=float(np.sqrt(np.mean(r ** 2))), max=float(np.abs(r).max()),
+                   far_move=far_move, exact_periods=exact)
 
 
 # ------------------------------------------------------------------ the spinor
