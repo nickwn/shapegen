@@ -330,7 +330,7 @@ def chord_map(V, F, log=None):
     i, j = es.E.T
     # converged: a layout of an unconverged flat metric is inconsistent (tol 1e-3 started the
     # head as well but a 2562-vertex ellipsoid 1e-1 off, from which it did not recover)
-    X = es.centre(uniformize(V, es.F, lengths=(es.E, es.logl)))
+    X = X_du = es.centre(uniformize(V, es.F, lengths=(es.E, es.logl)))
     T["uniformize"] = time.perf_counter() - t
     lr = np.zeros(len(i))
 
@@ -391,11 +391,44 @@ def chord_map(V, F, log=None):
     exact = far_move > FAR_EXACT
     if exact:
         t = time.perf_counter()
-        D = np.log(np.abs(es.periods(X))) - np.log(np.linalg.norm(X[i] - X[j], axis=1)) - sum(_periods(X, es))
-        lr = lr + D
-        X, u = step(X, scales(X), lu2, True)
-        lr = sum(_periods(X, es)) + D            # the far correction frozen, the local part at X
-        X, u = step(X, scales(X), lu2, True)
+
+        def converge(X, u, lu):
+            """Steps until the rows stop improving 4× a step (a fresh LU once GMRES on the
+            old one stalls): on an 8-vertex box a correction moves the map by 0.1 rad."""
+            fresh = False
+            for _ in range(20):
+                r0 = resid(X, u)
+                X1, u1 = step(X, u, lu, not fresh)
+                r1 = resid(X1, u1)
+                if r1 @ r1 < r0 @ r0:
+                    X, u = X1, u1
+                if r1 @ r1 > 0.25 * (r0 @ r0) or r1 @ r1 < 1e-24 * len(r1):
+                    if fresh or r1 @ r1 < 1e-24 * len(r1):
+                        break
+                    lu, fresh = factor(X), True
+                else:
+                    fresh = False
+            return X, u, lu
+
+        lu, rounds = lu2, 0
+        move = np.inf
+        for rounds in range(1, 6):              # the far correction from the exact periods, frozen
+            X0 = X
+            D = np.log(es.lengths(X)) - np.log(np.linalg.norm(X[i] - X[j], axis=1)) - sum(_periods(X, es))
+            lr = sum(_periods(X, es)) + D
+            X, u, lu = converge(X, scales(X), lu)
+            lr = sum(_periods(X, es)) + D        # the local part at the new X
+            X, u, lu = converge(X, scales(X), lu)
+            move = float(np.median(np.linalg.norm(es.centre(X) - es.centre(X0), axis=1)))
+            if log:
+                log(f"   exact round {rounds}: move {move:.1e}")
+            if move < 1e-7:
+                break
+        if move >= 1e-7:
+            # the frozen far correction does not settle (a spiky 9-vertex hull: moves of
+            # 0.06–0.3 rad per round): the exact Newton–Krylov solve, from the uniformization
+            X, u, _ = es.solve(X_du)
+            T["newton"] = True
         T["exact"] = time.perf_counter() - t
     r = resid(X, u)
     return X, dict(times=T, rms=float(np.sqrt(np.mean(r ** 2))), max=float(np.abs(r).max()),
