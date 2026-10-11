@@ -496,13 +496,40 @@ def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: flo
     n, k = len(ds.sw.half_modes(0.5, Ls)), len(v) // 2
     rho, res, gamma = close_code(rho, L, Ls, v0=np.r_[v[:k], np.zeros(n - k), v[k:], np.zeros(n - k)])
     lift = SpectralLift(Ls) if lift is None else lift
-    # check points as the exact path's: halfway from the chart centre to each corner, on up to n_check / 3 faces
-    fs = np.unique(np.linspace(0, len(F) - 1, max(1, min(len(F), n_check // 3))).astype(int))
-    zc = (0.5 * pc.chart(mf.Rf[fs][:, None], X[F[fs]])).ravel()
-    fc = np.repeat(fs, 3)
-    xc = np.einsum("nji,nj->ni", mf.Rf[fc], pc._unstereo(zc))
     info["times"]["code"] = time.perf_counter() - t
-    info.update(solver="fast", nodes=len(xs), sphere_weight=float(w.sum()))
+    t = time.perf_counter()
+    fs = np.unique(np.linspace(0, len(F) - 1, max(1, min(len(F), n_check // 3))).astype(int))
+    xc, Xc, nbad = surface_samples(V, F, X, fs)
+    info["times"]["samples"] = time.perf_counter() - t
+    info.update(solver="fast", nodes=len(xs), sphere_weight=float(w.sum()), sample_faces_dropped=nbad)
     return {"coeffs": rho, "sphere": X, "gamma": gamma,
             "f_hat": lift.forward(np.r_[res.psi1, res.psi2])[0],
-            "samples": (xc, np.ones(len(xc)), mf.points(xc, fc)), "map": mf, "info": info}
+            "samples": (xc, np.ones(len(xc)), Xc), "map": mf, "info": info}
+
+
+def surface_samples(V, F, X, fs, tol: float = 0.05):
+    """Check points of faces ``fs`` and their true surface points under the sphere
+    map ``X``: halfway from each face's chart centre to its corners, mapped by the
+    polyhedral metric's developing map (rays from the centre,
+    :class:`~shapegen.geom.poly_conformal.PolyMap`), not by the face's Möbius map,
+    whose correspondence is off at strong cones (a cube scored 0.060 against it,
+    0.0107 against the true points). Faces that do not develop to their 3D shape
+    (log side / angle error > ``tol``) or whose centre develops outside them
+    (slivers, which the exact path re-centres at ~4 s on a head) are dropped.
+    Returns ``(x, X3, dropped)``."""
+    pm = pc.PolyMap(V, F, S0=X)
+    S = pc._normalize(X)
+    Rf, cones, D = pm._develop_at(S, fs, S[F[fs]].mean(1))
+    err, inner = pm._shape_err(D, fs)
+    ok = np.flatnonzero((err < tol) & (inner > 0.0))
+    fs, Rf, D = fs[ok], Rf[ok], D[ok]
+    cones = cones.take(ok)
+    e1, e2 = D[:, 1] - D[:, 0], D[:, 2] - D[:, 0]
+    Mx = np.stack([np.stack([e1.real, e1.imag], -1), np.stack([e2.real, e2.imag], -1)], 1)
+    AB = np.linalg.solve(Mx, np.stack([pm.E1[fs], pm.E2[fs]], 1))
+    zc = (0.5 * pc.chart(Rf[:, None], S[F[fs]])).ravel()
+    r = np.repeat(np.arange(len(fs)), 3)
+    xc = np.einsum("nji,nj->ni", Rf[r], pc._unstereo(zc))
+    Dz = pc._rays(zc, np.zeros(len(r)), cones.take(r), np.full(len(r), -1)) - D[r, 0]
+    Xc = V[F[fs[r], 0]] + Dz.real[:, None] * AB[r, 0] + Dz.imag[:, None] * AB[r, 1]
+    return xc, Xc, int(len(err) - len(ok))
