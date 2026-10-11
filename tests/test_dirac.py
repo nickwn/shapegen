@@ -38,7 +38,7 @@ def test_constant_spinor_in_kernel():
 
 
 # --------------------------------------------------------------------------- #
-# ∂A/∂ρ — the adjoint's one ρ-dependent term                                  #
+# Spin transform: deterministic and well-gauged                               #
 # --------------------------------------------------------------------------- #
 
 def _random_form_inputs(sub, seed):
@@ -50,64 +50,6 @@ def _random_form_inputs(sub, seed):
             rng.standard_normal((n, 4)), rng.standard_normal((n, 4)))
 
 
-def _form(V, F, rho, a, b):
-    A, _ = dirac.dirac_operator(V, F, rho)
-    return float(a.ravel() @ (A @ b.ravel()))
-
-
-@pytest.mark.parametrize("sub", (1, 2))
-def test_dirac_grad_rho_matches_fd(sub):
-    """``dirac_grad_rho`` is the true ∂/∂ρ of ⟨a, A(ρ)b⟩, magnitude included.
-
-    The **ratio** is the assertion that matters. A wrong chain factor on the
-    ρ-coupling leaves the direction exact (cosine 1.0) and scales the whole
-    gradient, so a cosine-only check passes a gradient that is a constant factor
-    off — the failure mode this term is prone to.
-    """
-    V, F, rho, a, b = _random_form_inputs(sub, seed=1)
-    g = dirac.dirac_grad_rho(V, F, rho, a, b)
-
-    h = 1e-6
-    gfd = np.empty(len(V))
-    for v in range(len(V)):
-        rp, rm = rho.copy(), rho.copy()
-        rp[v] += h
-        rm[v] -= h
-        gfd[v] = (_form(V, F, rp, a, b) - _form(V, F, rm, a, b)) / (2.0 * h)
-
-    assert np.linalg.norm(g - gfd) / np.linalg.norm(gfd) < 1e-6
-    assert float(g @ gfd / (gfd @ gfd)) == pytest.approx(1.0, abs=1e-6)
-
-
-def test_dirac_grad_rho_is_quadratic_in_rho():
-    """``A`` is quadratic in ρ, so the gradient is affine: the second difference
-    in ρ vanishes and the ρ=0 gradient is the pure linear-stencil term."""
-    V, F, rho, a, b = _random_form_inputs(2, seed=2)
-    g0 = dirac.dirac_grad_rho(V, F, np.zeros(len(V)), a, b)
-    g1 = dirac.dirac_grad_rho(V, F, rho, a, b)
-    g2 = dirac.dirac_grad_rho(V, F, 2.0 * rho, a, b)
-    assert np.abs(g2 - 2.0 * g1 + g0).max() < 1e-10 * max(np.abs(g1).max(), 1.0)
-
-
-def test_dirac_grad_rho_diagonal_has_no_linear_term():
-    """On ``p = q`` the two linear contributions cancel, leaving only ``2A_fρ_p/9``.
-
-    At ρ=0 that term is zero, so a spinor supported on one vertex — which sees
-    only the diagonal block — must have zero gradient there.
-    """
-    V, F, _, _, _ = _random_form_inputs(2, seed=3)
-    n = len(V)
-    a = np.zeros((n, 4))
-    b = np.zeros((n, 4))
-    a[0] = b[0] = [1.0, 0.0, 0.0, 0.0]
-    g = dirac.dirac_grad_rho(V, F, np.zeros(n), a, b)
-    assert np.abs(g[0]) < 1e-12
-
-
-# --------------------------------------------------------------------------- #
-# ρ ↦ λ is smooth — the differentiability the adjoint rests on                #
-# --------------------------------------------------------------------------- #
-
 def _sh_rho(V, seed=0, lmax=6, amp=2.0):
     from scipy.special import sph_harm_y
     th = np.arccos(np.clip(V[:, 2], -1, 1))
@@ -118,35 +60,6 @@ def _sh_rho(V, seed=0, lmax=6, amp=2.0):
         for m in range(-l, l + 1):
             r += rng.standard_normal() * np.real(sph_harm_y(l, m, th, ph)) / l ** 2
     return r * (amp / np.abs(r).max())
-
-
-def test_spin_transform_is_differentiable_in_rho():
-    """``‖λ(ρ+hδ) − λ(ρ)‖ / h`` is constant as h → 0.
-
-    ``spla.eigsh`` returns an arbitrary member of the 4-dimensional eigenspace
-    (the right-ℍ action), and that choice is *not* continuous in ρ. What makes
-    the map differentiable anyway is :func:`~shapegen.geom.dirac._gauge_fix`:
-    dividing by the mean spinor is a canonical section, so the arbitrary factor
-    cancels before anything downstream sees it.
-
-    The adjoint of the eigensolve differentiates through this map, so if a future
-    change to ``spin_transform`` drops or weakens the gauge fix, the gradient goes
-    silently wrong rather than loudly wrong. This is that alarm.
-    """
-    V, F, _, _, _ = _random_form_inputs(2, seed=5)
-    rho = _sh_rho(V)
-    rng = np.random.default_rng(7)
-    d = rng.standard_normal(len(V))
-    d /= np.linalg.norm(d)
-
-    lam0, _ = dirac.spin_transform(V, F, rho)
-    slopes = []
-    for h in (1e-4, 1e-5, 1e-6):
-        lam, _ = dirac.spin_transform(V, F, rho + h * d)
-        slopes.append(np.linalg.norm(lam - lam0) / h)
-    print(f"[smoothness] slopes={['%.6f' % s for s in slopes]}")
-    assert slopes[0] == pytest.approx(slopes[-1], rel=1e-3)
-    assert slopes[1] == pytest.approx(slopes[-1], rel=1e-3)
 
 
 def test_spin_transform_is_deterministic():

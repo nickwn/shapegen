@@ -415,8 +415,6 @@ def test_gate_p8_4_round_sphere_is_level_with_the_cube():
     schedule at 1.10x. So the bound asserted is one-sided at **1.25x the
     cube** -- above that worst case with room for the noise floor, and far
     below what a degraded flow does.
-    :mod:`shapegen.quad.refine` closes the remaining gap (0.0714, beating
-    the cube) -- see ``test_quad_refine.py``.
 
     **The proof it discriminates.** On the old ``(6.0, 3.0, 2.0)`` schedule
     this same case scores **2.7525**, i.e. **38x the cube** -- and it does so
@@ -467,7 +465,7 @@ def test_gate_p8_4_round_sphere_is_level_with_the_cube():
 
 
 # --------------------------------------------------------------------------- #
-# The two factorings the optimisation in quad/refine.py needs                 #
+# Hoisting the decoded surface out of area_distortion                         #
 # --------------------------------------------------------------------------- #
 
 def test_decoded_surface_is_the_cone_independent_half_of_area_distortion():
@@ -483,25 +481,6 @@ def test_decoded_surface_is_the_cone_independent_half_of_area_distortion():
     hoisted = qf.area_distortion(cones, coeffs, L,
                                  surface=qf.decoded_surface(coeffs))["energy"]
     assert hoisted == plain
-
-
-def test_area_distortion_is_chart_independent_so_the_chart_can_be_frozen():
-    """The energy is a chart-free quantity, and measured it really is: the
-    pole ``project_cones`` searches out and an arbitrary fixed pole give the
-    same number to 1e-12 relative. That is what licenses freezing the chart
-    during an optimisation (:mod:`shapegen.quad.refine`) -- the pole search
-    contributes nothing but a discontinuity as the cones move."""
-    coeffs, _phi, A = _connection_from(seed=1)
-    Cmat, modes = qf.assemble_C(A, S, L)
-    psiG = qf.ginzburg_landau(qf.linear_start(Cmat, modes, S, L), Cmat, modes,
-                              S, L)
-    cones = qf.cones_from_field(psiG, S, L, over=4.0)
-    surf = qf.decoded_surface(coeffs)
-    chosen = qf.area_distortion(cones, coeffs, L, surface=surf)["energy"]
-    for pole in (np.array([0.0, 0.0, 1.0]), np.array([0.6, -0.8, 0.0])):
-        frozen = qf.area_distortion(cones, coeffs, L, surface=surf,
-                                    pole=pole)["energy"]
-        assert frozen == pytest.approx(chosen, rel=1e-12)
 
 
 # --------------------------------------------------------------------------- #
@@ -591,32 +570,6 @@ def test_dealias_zeros_high_modes():
             assert v == 1.0
 
 
-def test_area_distortion_energy_penalises_a_bad_placement():
-    """A sanity check on the metric itself, not a reproduction of the
-    bundle's exact reported ratio (which was measured on its own random
-    seed, and area-distortion energy is realisation-dependent). What must
-    hold regardless: the *same 8 charges*, badly clustered together instead
-    of spread out by GL, score far worse. (Comparing against an empty cone
-    list is not a fair baseline here -- Poincare-Hopf makes 0 cones
-    topologically inadmissible for a genus-0 field, so "no cones" isn't a
-    competing placement, just a different, invalid object.)"""
-    coeffs, _phi, A = _connection_from(seed=1)
-    Cmat, modes = qf.assemble_C(A, S, L)
-    psi0 = qf.linear_start(Cmat, modes, S, L)
-    psiG = qf.ginzburg_landau(psi0, Cmat, modes, S, L)
-    conesG = qf.cones_from_field(psiG, S, L)
-
-    rng = np.random.default_rng(0)
-    clustered = []
-    for _p, k in conesG:
-        q = np.array([0.01, 0.0, 1.0]) + 0.001 * rng.normal(size=3)
-        clustered.append((q / np.linalg.norm(q), k))
-
-    e_gl = qf.area_distortion_energy(conesG, coeffs, L)
-    e_clustered = qf.area_distortion_energy(clustered, coeffs, L)
-    assert e_gl < e_clustered
-
-
 # --------------------------------------------------------------------------- #
 # area_distortion: a metric that does not assume the linearisation            #
 # --------------------------------------------------------------------------- #
@@ -686,7 +639,6 @@ def test_area_distortion_matches_the_mesh_the_cones_actually_produce():
     assert traced / sampled == pytest.approx(1.0, abs=0.15)
 
 
-
 def test_production_amplitude_is_far_above_the_fixtures():
     """The calibration that reframed the spectral solve. Every quality number in this repo
     before 2026-09-21 was taken at ``rms(rho) <= 0.61``; real FaceScape codes
@@ -714,57 +666,6 @@ def test_rho_rms_needs_no_synthesis():
         c = bundle_style_coeffs(L=32, power=-2.0, seed=1)[:n_coeffs(24)] * amp
         assert qf.rho_rms(c) == pytest.approx((real_sh_basis(V, 24) @ c).std(),
                                               rel=0.01)
-
-
-def test_band_taper_restores_the_referee_on_a_scanned_face():
-    """A band-limited code can still be unresolvable: what matters is the
-    *spectrum* inside the band, not the band.
-
-    A face's ``rho_hat`` is the projection of a field with large content above
-    ``L``, so the truncation piles energy into the top modes -- 0.665 of the
-    coefficient norm sits in the top quartile of degrees, against 0.071 for an
-    ``l^-2`` fixture at the same rms. That is what stops
-    :func:`shapegen.codec.decode` being mesh-convergent, and so what made
-    :func:`area_distortion` unable to referee a face.
-
-    Asserted here on a *synthetic* flat-spectrum field rather than a
-    FaceScape head, so it runs without the cache: the taper must reduce
-    top-of-band share monotonically while leaving the low degrees alone.
-    """
-    def top_share(c, band):
-        p, i = [], 0
-        for l in range(band + 1):
-            n = 2 * l + 1
-            p.append(np.linalg.norm(c[i:i + n]))
-            i += n
-        p = np.array(p)
-        return np.linalg.norm(p[3 * band // 4:]) / np.linalg.norm(p)
-
-    rng = np.random.default_rng(0)
-    reduction = {}
-    for band in (16, 24, 32):
-        flat = rng.normal(size=n_coeffs(band))     # flat spectrum, like a face
-        shares = [top_share(qf.band_taper(flat, band, t), band)
-                  for t in (0.0, 5e-4, 1e-3, 2e-3, 4e-3)]
-        assert all(shares[i] > shares[i + 1] for i in range(len(shares) - 1))
-        assert shares[0] > 0.6                     # untapered: top-heavy
-        reduction[band] = shares[-1] / shares[0]
-
-    # exp(-t l(l+1)) bites harder at higher degree, so the same t does more
-    # work at a higher band -- which is right: a higher band means finer
-    # features and more need of it. Measured 0.712 / 0.384 / 0.146.
-    assert reduction[16] > reduction[24] > reduction[32]
-    assert reduction[24] < 0.5
-
-    # low degrees essentially untouched at the default strength
-    band = 24
-    flat = rng.normal(size=n_coeffs(band))
-    tapered = qf.band_taper(flat, band, qf.DEFAULT_TAPER)
-    assert tapered[0] == pytest.approx(flat[0], rel=1e-12)          # l=0
-    assert np.abs(tapered[1:4] / flat[1:4] - 1.0).max() < 0.01      # l=1
-    # and it is a pure attenuation -- never amplifies, never flips sign
-    ratio = tapered[flat != 0] / flat[flat != 0]
-    assert ratio.min() > 0.0 and ratio.max() <= 1.0 + 1e-12
 
 
 def test_potential_band_extra_scales_with_the_bandlimit():

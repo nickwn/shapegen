@@ -29,8 +29,7 @@ __all__ = [
     "connection_field",
     "apply_C", "assemble_C", "linear_start", "dealias", "epsilon_ceiling",
     "anneal_schedule", "ginzburg_landau", "DEFAULT_LEVELS",
-    "cones_from_field", "winding_total", "area_distortion_energy",
-    "rho_rms", "band_taper", "DEFAULT_TAPER",
+    "cones_from_field", "winding_total", "rho_rms",
     "decoded_surface", "area_distortion",
 ]
 
@@ -79,37 +78,6 @@ def rho_rms(rho_hat: np.ndarray) -> float:
     """
     c = np.asarray(rho_hat, dtype=float)
     return float(np.sqrt((c ** 2).sum() / (4.0 * np.pi)))
-
-
-DEFAULT_TAPER = 1e-3
-"""Heat-kernel time :func:`band_taper` uses by default on scanned input."""
-
-
-def band_taper(rho_hat: np.ndarray, L: int, t: float = DEFAULT_TAPER):
-    """Smooth ``rho_hat`` by a heat kernel, ``c_lm *= exp(-t l(l+1))``.
-    Returns a new coefficient vector (same real-SH layout).
-
-    Why a band-limited code needs it: on scanned input the spectrum *inside*
-    the band is top-heavy (L=24: 0.665 of the coefficient norm in the top
-    quartile of degrees on a FaceScape head, vs 0.071 on the ``l^-2``
-    fixture), so the decoded surface has features at the resolution limit and
-    :func:`area_distortion`'s icosphere sampling does not converge.
-
-    :data:`DEFAULT_TAPER` = 1e-3 is a compromise: stronger tapers converge the
-    referee further but push ``rho_rms`` below ~1, out of the regime the
-    exact potential matters in (at 1e-3 a head keeps rms ~1.45-1.5). The
-    referee-drift evidence behind 1e-3 predates the spectral decoder.
-
-    Trap: this is a *measurement* aid, not a pipeline stage -- it changes the
-    shape. Do not silently apply it to something you ship.
-    """
-    c = np.array(rho_hat, dtype=float, copy=True)
-    i = 0
-    for l in range(L + 1):
-        n = 2 * l + 1
-        c[i:i + n] *= np.exp(-t * l * (l + 1))
-        i += n
-    return c
 
 
 def curvature_potential(rho_hat: np.ndarray, L: int, spinor=None) -> np.ndarray:
@@ -484,52 +452,6 @@ def winding_total(field_grid: np.ndarray) -> float:
 # The quality metric Gate P8.4 is scored on                                   #
 # --------------------------------------------------------------------------- #
 
-def area_distortion_energy(cones, rho_hat: np.ndarray, L: int, LS: int = 12,
-                            power: int = 2, n_samples: int = 30000,
-                            seed: int = 0) -> float:
-    """``tune.py``'s ``energy``: how well a set of point cones reproduces the
-    curvature moments ``K_lm``, in an ``H⁻power`` norm (``power=2`` matches
-    the cross-field quality gate). Lower is better.
-
-    ``K_lm`` are the degree ``1..LS`` moments of ``2ρ`` on a Monte Carlo
-    sample; cones ``(P_i, k_i)`` contribute ``2π Σ_i k_i · conj(Y_lm(P_i))``.
-
-    Trap: it scores against the linearisation ``μ = 1 + 2ρ``, which the
-    potential no longer uses, so it cannot referee potential changes; use
-    :func:`area_distortion` for that.
-    """
-    from scipy.special import sph_harm_y
-
-    rng = np.random.default_rng(seed)
-    X = rng.normal(size=(n_samples, 3))
-    X /= np.linalg.norm(X, axis=1, keepdims=True)
-    th = np.arccos(np.clip(X[:, 2], -1.0, 1.0))
-    ph = np.arctan2(X[:, 1], X[:, 0])
-
-    rho_c = real_to_complex(np.asarray(rho_hat, dtype=float), L)
-    modes0 = _sw.mode_list(0, L)
-    mu_grid = np.zeros(n_samples)
-    for i, (l, m) in enumerate(modes0):
-        if 1 <= l <= LS:
-            mu_grid += np.real(2.0 * rho_c[l, l + m] * sph_harm_y(l, m, th, ph))
-
-    llw = np.array([l * (l + 1) for l in range(1, LS + 1) for _m in range(-l, l + 1)],
-                    dtype=float)
-    Klm = np.array([4.0 * np.pi * np.mean(mu_grid * np.conj(sph_harm_y(l, m, th, ph)))
-                    for l in range(1, LS + 1) for m in range(-l, l + 1)])
-
-    if len(cones) == 0:
-        d = -Klm
-    else:
-        P = np.array([p for p, _k in cones])
-        k = np.array([kk for _p, kk in cones])
-        tc = np.arccos(np.clip(P[:, 2], -1.0, 1.0))
-        pc = np.arctan2(P[:, 1], P[:, 0])
-        Y = np.array([sph_harm_y(l, m, tc, pc)
-                      for l in range(1, LS + 1) for m in range(-l, l + 1)])
-        d = 2.0 * np.pi * (Y.conj() @ k) - Klm
-    return float(np.sum(np.abs(d) ** 2 / llw ** power))
-
 
 # --------------------------------------------------------------------------- #
 # The quality metric a change to the potential can actually be judged on      #
@@ -575,8 +497,8 @@ def area_distortion(cones, rho_hat: np.ndarray, L: int, subdiv: int = 5,
 
     A quad mesh lays down cells that are exactly ``s x s`` in the developed
     plane; this measures how unequal they become on the surface. It never
-    forms a curvature potential, so it can referee changes to one (unlike
-    :func:`area_distortion_energy`). 0 is unreachable, since a conformal map
+    forms a curvature potential, so it can referee changes to one. 0 is
+    unreachable, since a conformal map
     cannot preserve area.
 
     * surface area element: :func:`decoded_surface` (``lift_spectral``);
@@ -597,7 +519,7 @@ def area_distortion(cones, rho_hat: np.ndarray, L: int, subdiv: int = 5,
     L=16, ~7% at L=32 vs subdiv 6) but not on FaceScape faces (20-35%, and
     cone-set comparisons changed sign). How much of that was the decoder and
     how much the sampling has not been re-measured; check convergence in
-    ``subdiv`` (or :func:`band_taper`) before quoting a face number.
+    ``subdiv`` before quoting a face number.
 
     ``surface`` takes a prebuilt :func:`decoded_surface`. ``pole`` freezes
     the chart (forwarded to :func:`~shapegen.quad.cones.project_cones`),

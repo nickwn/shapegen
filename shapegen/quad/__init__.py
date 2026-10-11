@@ -5,9 +5,6 @@ umbilics (not built and not planned on this track). End to end:
 
 - :mod:`shapegen.quad.field` — the connection operator + Ginzburg-Landau
   anneal that produces the cones (no curvature-alignment blend term).
-- :mod:`shapegen.quad.refine` — optional: locally optimise the *positions*
-  of that (already correct) cone set against ``field.area_distortion``. Not
-  the rejected "make cones emerge from a relaxation" — see its docstring.
 - :mod:`shapegen.quad.cones` — pole choice + stereographic projection of
   those cones into a flat chart (minus the umbilic-splitting it did
   before projecting — the GL cones already carry the right ±¼ index).

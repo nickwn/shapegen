@@ -246,10 +246,6 @@ out["ok"], out["P3"], out["faces"], out["grid"].euler, out["grid"].coverage
    - **Trap:** a sign flip gives Euler characteristic −3240 downstream.
    - The round sphere gives 8 cones of +¼.
 
-Optional: `quad/refine.refine_cones` moves cone positions (count fixed) to lower an
-area-distortion energy. On traced meshes it gains ~1.08–1.18×; the sampled energy
-overstates that ~3×.
-
 **P4: chart** (`quad/cones.project_cones`)
 
 Choose a pole far from every cone, rotate it to north, and project stereographically

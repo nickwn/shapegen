@@ -41,7 +41,7 @@ from .operators import cotan_laplacian, edge_cotan_weights, vertex_areas
 
 __all__ = [
     "left_matrix", "dirac_assembly", "mass_quaternionic", "dirac_operator",
-    "apply_dirac", "dirac_grad_rho", "rho_from_lambda", "dirac_residual",
+    "apply_dirac", "rho_from_lambda", "dirac_residual",
     "spin_transform", "transformed_edges", "integrate_edges",
     "integrate_transformed_edges",
 ]
@@ -160,46 +160,6 @@ def dirac_operator(V, F, rho):
          (np.concatenate(rows_all), np.concatenate(cols_all))),
         shape=(4 * n, 4 * n)).tocsr()
     return A, mass_quaternionic(V, F)
-
-
-def dirac_grad_rho(V, F, rho, a, b):
-    """``∂/∂ρ_v ⟨a, A(ρ) b⟩`` for quaternion fields ``a``, ``b`` — the ``∂A/∂ρ``
-    contraction, returned as ``(n,)``.
-
-    With a cotangent ``q`` from ``(A − γM) q = Pᵀ p``, the gradient of a
-    loss through ``λ`` is ``−dirac_grad_rho(V, F, rho, q, lam)``; this returns
-    the plain derivative of the form.
-
-    From :func:`dirac_operator`'s block, ``ρ`` enters ``A_{pq}`` three times, so
-
-        ∂A_{pq}/∂ρ_p = +e_q/6 + (A_f ρ_q/9)·1̂
-        ∂A_{pq}/∂ρ_q = −e_p/6 + (A_f ρ_p/9)·1̂
-
-    (``1̂`` the real unit quaternion, since the ρ² term is real). Both are
-    scattered, so the diagonal ``p = q`` — where the two linear terms cancel and
-    only ``2A_f ρ_p/9`` survives — comes out right without a special case.
-
-    Trap: ``ρ`` is per-vertex P1; a face-lumped stencil would need an extra ⅓
-    chain factor, and missing it is 3× off in magnitude only, which a cosine
-    check will not catch (``tests/test_dirac.py`` gates the magnitude).
-    """
-    n = len(V)
-    Af = triangle_areas(V, F)
-    e = _opposite_edges(V, F)
-    rho = np.asarray(rho, dtype=float)
-    rp = [rho[F[:, p]] for p in range(3)]
-    out = np.zeros(n)
-    for p in range(3):
-        ap = a[F[:, p]]
-        for q in range(3):
-            bq = b[F[:, q]]
-            d_p = e[q] / 6.0
-            d_p[:, 0] += Af * rp[q] / 9.0
-            d_q = -e[p] / 6.0
-            d_q[:, 0] += Af * rp[p] / 9.0
-            np.add.at(out, F[:, p], (ap * qmul(d_p, bq)).sum(1))
-            np.add.at(out, F[:, q], (ap * qmul(d_q, bq)).sum(1))
-    return out
 
 
 def rho_from_lambda(V, F, lam):

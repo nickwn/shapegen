@@ -16,7 +16,7 @@ import numpy as np
 __all__ = ["locate_on_sphere", "locate_on_mesh", "resample_to"]
 
 
-def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8):
+def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray):
     """For each unit direction, the containing triangle of ``(S, F)`` and its
     barycentric weights. Returns ``(idx (m,), bary (m,3), n_fallback)``.
 
@@ -50,8 +50,6 @@ def locate_on_sphere(S: np.ndarray, F: np.ndarray, dirs: np.ndarray, k: int = 8)
     production path returns 0 fallbacks at icosphere subdiv 6. A source with
     *few, huge* near-origin faces does produce collapsed output triangles, so
     check triangle areas on the result if the source is unusual.
-
-    ``k`` is unused and kept for signature compatibility.
     """
     import igl  # noqa: PLC0415
 

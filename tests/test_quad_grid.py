@@ -644,8 +644,7 @@ def test_end_to_end_is_gated_on_quality_and_not_only_on_topology():
     control.
 
     This is :func:`~shapegen.quad.field.area_distortion`'s integral measured
-    on the mesh the cones actually produce rather than on random samples --
-    the headline number, per :mod:`shapegen.quad.refine`'s docstring. The two
+    on the mesh the cones actually produce rather than on random samples. The two
     agree here to 4% (0.0742 traced against 0.0713 sampled).
 
     Both runs are traced at the cell ``cell_for_faces(..., 4000)`` asks for

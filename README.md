@@ -237,7 +237,6 @@ if out["ok"]:
 - Face-count control within 0.4% of target at 20000.
 - About 13 s per head at L=32 (field and anneal ~6 s, trace ~4.4 s, lift ~2.5 s).
 - An option for pure quads (no triangles at cones), at a smaller cell.
-- Optional cone-position refinement for more uniform face areas.
 
 ### Known limits
 
