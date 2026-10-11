@@ -15,6 +15,14 @@ mesh ──encoder──▶ z ∈ ℝ^K ──flow matching──▶ z' ──de
 - **Mesh generation**: z → a watertight quad mesh, computed from the code
   directly, never via a triangle mesh.
 
+![One head through the codec and the mesher](docs/img/pipeline.png)
+
+*One FaceScape head (smoothed, closed) through the pipeline: the input mesh;
+its conformal map to the sphere, coloured by the encoded ρ (red positive, blue
+negative); the decoded surface at L = 8, 16 and 32 (error is relative
+Procrustes); and the quad mesh computed from the L=32 code. Regenerate with
+`python -m scripts.readme_figures`.*
+
 The current target is faces; nothing is face-specific. The input domain is
 **genus-0 surfaces**: closed, no holes or handles (heads, bottles, cubes).
 
@@ -148,6 +156,11 @@ the sample distribution, not the loss curve: a flow-matching loss is floored
 by the variance of its conditional target and says little about sample
 quality.
 
+![Heads sampled from the flow](docs/img/samples.png)
+
+*Codes sampled from a rectified flow trained on 360 heads at L=24 (an earlier
+run, from `reports/faces/faces_flow_rho.npz`), then decoded. No input mesh is involved.*
+
 ### Status
 
 `scripts/train_faces.py` runs end to end on smoothed face scans with both
@@ -245,6 +258,7 @@ if out["ok"]:
 | codec | `shapegen/codec.py` (entry point), `shapegen/geom/`, `shapegen/spectral/` |
 | generative | `shapegen/models/{basis,flow}.py`, `scripts/{build_dataset,encode_faces,train_faces}.py` |
 | mesh gen | `shapegen/quad/` (entry: `pipeline.py`), `scripts/quad_demo.py` |
+| figures | `scripts/readme_figures.py` → `docs/img/` |
 | shared | `shapegen/data/`, `shapegen/eval/` |
 
 ## Requirements
