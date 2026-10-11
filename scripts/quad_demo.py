@@ -1,4 +1,4 @@
-"""Render the quad-mesh pipeline on real face ρ fields.
+"""Render the quad-mesh pipeline on real face codes.
 
 This script only loads data, renders and parses the CLI; the pipeline itself
 (:func:`~shapegen.quad.pipeline.solve_field`,
@@ -6,18 +6,18 @@ This script only loads data, renders and parses the CLI; the pipeline itself
 :mod:`shapegen.quad.pipeline`.
 
 **Input.** ``--cache`` is an ``scripts/encode_faces.py`` cache
-(default ``reports/faces/rho_ico6.npz``: 400 subjects, per-vertex ρ on a
-shared icosphere-6 base sphere, ``t_smooth=1e-4``). A few fields are
-projected to raw real-SH ρ̂ at bandwidth ``L`` (:func:`project_rho`: the
-``RhoBasis`` projection without its whitening). ``--synthetic``, or a
-missing cache, uses power-law fixture fields instead.
+(default ``reports/faces/rho_ico6.npz``: 400 subjects on a shared
+icosphere-6 base sphere, ``t_smooth=1e-4``). A few heads are encoded to raw
+ρ̂ at bandwidth ``L`` (``codec.encode(..., method="quotient")`` against the
+cache's sphere). ``--synthetic``, or a missing cache, uses power-law fixture
+fields instead.
 
 **Output**, per sample, in ``--out``:
 
 * ``<label>.png`` -- the cross field: lon/lat map and sphere, linear start
   vs. Ginzburg-Landau, with raw and period-solved cones overlaid;
 * ``<label>_quadmesh.png`` -- the lifted quad mesh in ℝ³, front and back
-  views (shaded, back faces culled; see :func:`plot_quad_mesh_3d`), with
+  views (shaded, back faces culled; :mod:`scripts.render`), cones marked, with
   Euler characteristic, coverage and median isotropy in the title;
 
 plus one summary row per sample on stdout.
@@ -55,34 +55,14 @@ import matplotlib               # noqa: E402
 matplotlib.use("Agg")           # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
 from mpl_toolkits.mplot3d import Axes3D  # noqa: E402,F401 (registers 3d projection)
-from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection  # noqa: E402
 
 from shapegen.eval.metrics import nose_tip                   # noqa: E402
-from shapegen.geom.encode import real_sh_basis, sh_project  # noqa: E402
-from shapegen.geom.operators import vertex_areas            # noqa: E402
+from shapegen import codec                                   # noqa: E402
+from shapegen.geom.mesh import Mesh                         # noqa: E402
 from shapegen.quad.pipeline import build_quad_mesh, solve_field  # noqa: E402
 from shapegen.spectral import swsh as sw                     # noqa: E402
 
-
-# --------------------------------------------------------------------------- #
-# rho fields -> rho-hat, and the field solve                                  #
-# --------------------------------------------------------------------------- #
-
-def project_rho(sphere: np.ndarray, faces: np.ndarray, rho_field: np.ndarray,
-                 L: int, Y: np.ndarray | None = None) -> np.ndarray:
-    """Per-vertex ρ (on ``sphere``) -> raw real-SH coefficients at bandwidth
-    ``L``. Matches ``RhoBasis._project`` exactly, minus the whitening -- the
-    solver wants ρ̂ itself, not a standardised training code.
-
-    ``real_sh_basis(sphere, L)`` depends only on ``(sphere, L)`` (~0.15 s at
-    L=32 on the 40962-vertex ico6 sphere); pass a precomputed ``Y`` when
-    projecting several fields on the same sphere, as
-    :func:`load_face_samples` does.
-    """
-    if Y is None:
-        Y = real_sh_basis(sphere, L)
-    mass = vertex_areas(sphere, faces)
-    return sh_project(rho_field, Y, mass=mass)
+from scripts.render import QUAD, render, view_frame         # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -294,121 +274,13 @@ def plot_cross_field_3d(ax, vec: np.ndarray, S: int, L: int, cones, title: str,
 # The extracted quad mesh itself                                              #
 # --------------------------------------------------------------------------- #
 
-def _view_towards(direction: np.ndarray):
-    """``(elev, azim)`` for a camera on the far side of ``direction`` from
-    the origin, looking back along it -- i.e. the view a person standing in
-    that direction and facing the origin would see.
-
-    ``direction`` is :func:`shapegen.eval.metrics.nose_tip` on the lifted
-    head; looking back along it shows the face front (eyes, nose, mouth, both
-    ears). Trap: an equatorial sweep around a guessed vertical axis never
-    finds the front, only side profiles -- ``elev=0, azim=270`` looks
-    plausible and is the underside of the jaw.
-    """
-    d = direction / np.linalg.norm(direction)
-    elev = np.degrees(np.arcsin(np.clip(d[2], -1.0, 1.0)))
-    azim = np.degrees(np.arctan2(d[1], d[0]))
-    return elev, azim
-
-
-def plot_quad_mesh_3d(ax, P3: np.ndarray, quads: np.ndarray, cones_3d,
-                      title: str, elev: float = 20.0, azim: float = 35.0,
-                      wireframe: bool = False,
-                      cull_backfaces: bool = True):
-    """The actual extracted-and-lifted quad mesh: shaded faces, cones marked.
-    ``P3`` is re-centered/scaled for display only.
-
-    ``wireframe`` overlays every edge; off by default because at ~20k faces
-    one line per cell is finer than the raster and just darkens the surface.
-    Use it for coarse meshes.
-
-    ``cull_backfaces`` drops faces whose outward normal points away from the
-    camera. Trap: the mesh is closed, and ``Poly3DCollection``'s
-    painter's-algorithm ordering lets back faces win against front ones
-    where the surface folds towards the viewer (nose, ears).
-
-    Orthographic projection, so perspective adds no unevenness on top of the
-    mesh's inherent conformal cell-size variation. Faces are
-    Lambertian-shaded by their own normal: head-on, a face has no silhouette
-    and reads as a flat cutout without per-face relief.
-    """
-    ax.set_proj_type("ortho")
-    ax.computed_zorder = False
-    center = P3.mean(axis=0)
-    scale = np.linalg.norm(P3 - center, axis=1).max()
-    scale = scale if scale > 0 else 1.0
-    Pn = (P3 - center) / scale
-
-    if len(quads):
-        faces = [Pn[q] for q in quads]
-        light = np.array([np.cos(np.radians(elev)) * np.cos(np.radians(azim)),
-                          np.cos(np.radians(elev)) * np.sin(np.radians(azim)),
-                          np.sin(np.radians(elev))])
-        # faces are variable-length loops (quads, plus a triangle at any cone
-        # that landed on a cell centre), so the normal comes from Newell's
-        # formula rather than from a fixed pair of diagonals
-        normals = np.array([np.cross(f - np.roll(f, -1, axis=0),
-                                     f + np.roll(f, -1, axis=0)).sum(axis=0)
-                            for f in faces])
-        normals /= np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12
-
-        # quad_grid orients faces counter-clockwise from outside, so Newell's
-        # normal should already be outward; one global sign check as
-        # insurance -- never per face, so a concave nose cannot flip itself.
-        radial = np.array([f.mean(axis=0) for f in faces])
-        if float(np.sum(np.einsum("ij,ij->i", normals, radial))) < 0.0:
-            normals = -normals
-
-        view = _view_direction(elev, azim)
-        keep = (normals @ view > 0.0) if cull_backfaces else np.ones(len(faces), bool)
-        faces = [f for f, k in zip(faces, keep) if k]
-        shade = np.clip(normals[keep] @ light, 0.25, 1.0)
-        base = np.array([0xa8, 0xc8, 0xe8]) / 255.0
-        colors = np.clip(base[None, :] * shade[:, None], 0.0, 1.0)
-        pc = Poly3DCollection(faces, facecolor=colors, edgecolor="none",
-                              zorder=1)
-        ax.add_collection3d(pc)
-        if wireframe:
-            segs = []
-            for f in faces:
-                for k in range(len(f)):
-                    segs.append([f[k], f[(k + 1) % len(f)]])
-            lc = Line3DCollection(segs, colors="#204060", linewidths=0.35,
-                                  zorder=2)
-            ax.add_collection3d(lc)
-
-    if cones_3d:
-        Pc = np.array([(p - center) / scale for p, _k in cones_3d])
-        k = np.array([kk for _p, kk in cones_3d])
-        # cones on the far side have to be culled the same way the faces are:
-        # `computed_zorder = False` means a scatter is drawn over the surface
-        # regardless of depth, so without this the back of the head's cones
-        # float in front of the face
-        front = (Pc @ _view_direction(elev, azim) > 0.0) if cull_backfaces \
-            else np.ones(len(Pc), bool)
-        for mask, color in ((k > 0, "lime"), (k <= 0, "red")):
-            m = mask & front
-            if m.any():
-                ax.scatter(Pc[m, 0], Pc[m, 1], Pc[m, 2], s=45,
-                          color=color, edgecolor="black", linewidth=0.7,
-                          depthshade=False, zorder=3)
-
-    ax.set_title(title, fontsize=10)
-    ax.set_box_aspect([1, 1, 1])
-    lim = 1.15
-    ax.set_xlim(-lim, lim); ax.set_ylim(-lim, lim); ax.set_zlim(-lim, lim)
-    ax.set_axis_off()
-    ax.view_init(elev=elev, azim=azim)
-
 
 def render_quad_mesh(quad_mesh: dict, title_prefix: str, out_path):
     """Two views (front + back) of the extracted quad mesh, with a title
     reporting the trace's and lift's own diagnostics: vertex and face counts, how many
     faces are not quads, cell size, Euler characteristic, coverage and
     median isotropy."""
-    fig = plt.figure(figsize=(12, 6))
-    ax0 = fig.add_subplot(1, 2, 1, projection="3d")
-    ax1 = fig.add_subplot(1, 2, 2, projection="3d")
+    fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(12, 6))
 
     if not quad_mesh.get("ok"):
         fig.suptitle(f"{title_prefix} -- quad mesh: {quad_mesh.get('reason')}",
@@ -430,18 +302,26 @@ def render_quad_mesh(quad_mesh: dict, title_prefix: str, out_path):
                 f"coverage={g.coverage:.4f}, median isotropy={med_an:.3f}",
                 fontsize=11)
 
-    # Only used to orient the camera: nose_tip needs just a point cloud.
+    # Camera on the nose_tip direction (it needs just a point cloud). Trap: an
+    # equatorial sweep around a guessed vertical axis never finds the front,
+    # only side profiles.
     P3 = quad_mesh["P3"]
     Dc = P3 - P3.mean(axis=0)
-    Dn = Dc / np.sqrt((Dc ** 2).sum(axis=1)).mean()
-    elev, azim = _view_towards(nose_tip(Dn))
-
-    plot_quad_mesh_3d(ax0, quad_mesh["P3"], quad_mesh["faces"],
-                      quad_mesh["cones_3d"], "front", elev=elev, azim=azim)
-    # the opposite pole, not azim+180 -- azim has no effect exactly at the
-    # pole (elev close to +/-90), so "back" means flipping elev, not azim.
-    plot_quad_mesh_3d(ax1, quad_mesh["P3"], quad_mesh["faces"],
-                      quad_mesh["cones_3d"], "back", elev=-elev, azim=azim)
+    nose = nose_tip(Dc / np.sqrt((Dc ** 2).sum(axis=1)).mean())
+    up = np.linalg.eigh(Dc.T @ Dc)[1][:, 2]      # the decode's frame is arbitrary:
+    up = up if up @ nose >= 0 else -up           # crown-chin is the long axis
+    # cones sit on the unit sphere; their surface points are the lift's, so
+    # mark the nearest lifted vertex
+    sph = quad_mesh["grid"].points @ quad_mesh["chart"]["Rm"]
+    pts = []
+    for sign, color in ((1, "lime"), (-1, "red")):
+        sel = [p for p, k in quad_mesh["cones_3d"] if np.sign(k) == sign]
+        if sel:
+            pts.append((P3[np.argmax(np.array(sel) @ sph.T, axis=1)], color))
+    for ax, fwd, name in ((ax0, nose, "front"), (ax1, -nose, "back")):
+        render(ax, P3, quad_mesh["faces"], view_frame(fwd, up),
+               base=QUAD, points=pts)
+        ax.set_title(name, fontsize=10)
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
@@ -510,17 +390,14 @@ def render_sample(rho_hat, L, S, levels, title_prefix, out_path,
 # --------------------------------------------------------------------------- #
 
 def load_face_samples(cache_path: Path, n: int, L: int, rng: np.random.Generator):
-    """A few real face rho fields from an encode_faces.py cache, projected to
-    rho-hat at bandwidth L. Returns [(label, rho_hat), ...]."""
+    """A few real heads from an encode_faces.py cache, encoded to raw rho-hat at
+    bandwidth L against the cache's sphere. Returns [(label, rho_hat), ...]."""
     d = np.load(cache_path)
-    sphere, faces, fields = d["sphere"], d["faces"], d["fields"]
-    idx = rng.choice(len(fields), size=min(n, len(fields)), replace=False)
-    Y = real_sh_basis(sphere, L)      # built once, shared across every face
-    out = []
-    for i in idx:
-        rho_hat = project_rho(sphere, faces, fields[i], L, Y=Y)
-        out.append((f"face #{i}", rho_hat))
-    return out
+    sphere, faces, X = d["sphere"], d["faces"], d["X"]
+    idx = rng.choice(len(X), size=min(n, len(X)), replace=False)
+    return [(f"face #{i}", codec.encode(Mesh(np.asarray(X[i], float), faces), L,
+                                        sphere=sphere, method="quotient").coeffs)
+            for i in idx]
 
 
 def synthetic_samples(n: int, L: int):
@@ -548,9 +425,7 @@ def main():
                     help="use F1-style synthetic rho fields instead of --cache")
     ap.add_argument("-n", type=int, default=3, help="number of sample faces")
     ap.add_argument("-L", type=int, default=32,
-                    help="cross-field bandwidth (the field lives at this "
-                         "resolution regardless of what L the cache's rho was "
-                         "encoded at)")
+                    help="code and cross-field bandwidth")
     ap.add_argument("-S", type=int, default=4, help="cross-field spin (4 = a "
                     "genuine 4-fold cross)")
     ap.add_argument("--levels", type=float, nargs="+", default=None,
