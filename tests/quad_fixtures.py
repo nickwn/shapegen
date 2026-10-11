@@ -96,31 +96,6 @@ def fixture_f1(L: int = 32, seed: int = 1, subdiv: int = 4):
     return V, F, rho, coeffs
 
 
-def fixture_f2(L: int = 32, subdiv: int = 3, seed: int = 0):
-    """F2 — a real code: ``codec.encode(bottle, L=32, method="spectral")``."""
-    from shapegen.codec import encode
-    from shapegen.data.dataset import demo_bottle_meshes
-
-    mesh = demo_bottle_meshes(n=1, subdiv=subdiv, seed=seed)[0]
-    return encode(mesh, L=L, method="spectral")
-
-
-def fixture_f3(roots, L: int = 32, remesh: float = 0.8, t_smooth: float = 1e-4):
-    """F3 — the hard case: a FaceScape head, ``γ_mesh ≈ 2.7e-2`` at L=32.
-
-    Needs a local FaceScape ``models_reg`` root, so it is not exercised by the
-    automated gate suite. ρ is ~99% unrepresentable on scanned faces, so
-    development is driven on F1/F2; F3 is a stress test, not a target.
-    """
-    from shapegen.codec import encode
-    from shapegen.data.faces import build_dataset
-    from shapegen.geom.mesh import Mesh
-
-    X, F = build_dataset(roots, t_smooth=t_smooth, align=False, cap=True,
-                          remesh=remesh, limit=1)
-    return encode(Mesh(X[0], F), L=L, method="spectral")
-
-
 F4_SPECTRA = (-2.0, -1.5, -1.0, -0.5)
 """F4 — spectra ℓ⁻² … ℓ⁻⁰·⁵ for the umbilic-count sweep."""
 

@@ -1,8 +1,8 @@
 """Acceptance tests for the public codec façade.
 
-The maths is gated in test_dirac_spectral / test_spectral_adjoint /
-test_eigen_sphere / test_encode. What is checked here is the contract downstream code depends on: a round trip through the
-façade reproduces the error it reports, and the convergence flag is honest.
+The maths is gated in test_dirac_spectral / test_dirac_quotient / test_eigen_sphere /
+test_encode. What is checked here is the contract downstream code depends on: a
+round trip through the façade reproduces the error it reports.
 """
 
 import numpy as np
@@ -16,30 +16,12 @@ def test_roundtrip_reproduces_the_reported_error():
     """``decode(encode(m))`` must actually reproduce the error ``encode`` claims —
     the one contract everything downstream leans on."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    res = codec.encode(mesh, L=8, maxiter=40)
+    res = codec.encode(mesh, L=8)
     X = codec.decode(res.coeffs, res.sphere)
     err = codec.shape_error(mesh.vertices, X)
     print(f"[codec] {res}  decode-check {err:.5f}")
     assert err == pytest.approx(res.err, rel=1e-9)
     assert res.coeffs.shape == (codec.n_coeffs(8),)
-    assert res.err < res.err0                       # optimising beat the initialiser
-
-
-def test_encode_beats_its_initialiser():
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=1)[0]
-    res = codec.encode(mesh, L=8, maxiter=40)
-    assert res.err < 0.6 * res.err0
-
-
-def test_converged_flag_is_honest():
-    """A one-iteration budget must report itself as capped, not as converged.
-
-    An iteration-capped encode is an upper bound on the error. This flag is the
-    only thing standing between that and a silently overstated result.
-    """
-    mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
-    capped = codec.encode(mesh, L=4, maxiter=1)
-    assert not capped.converged
 
 
 def test_shape_error_is_similarity_invariant():
@@ -72,19 +54,27 @@ def test_base_sphere_is_gauge_fixed_and_round():
     assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
 
 
-def test_direct_and_spectral_are_both_available_and_differ():
-    """``direct`` is the cheap measurement training uses; ``spectral`` (the
-    default) optimises the decoded shape and must beat it on a fixed mesh. Both
-    decode to exactly the error they report."""
+def test_direct_and_quotient_are_both_available_and_differ():
+    """``direct`` is the cheap measurement training uses; ``quotient`` targets the
+    decoder and must beat it on a fixed mesh. Both decode to exactly the error
+    they report."""
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
     loc = codec.encode(mesh, L=8, method="direct")
-    spec = codec.encode(mesh, L=8, maxiter=60, sphere=loc.sphere)
-    print(f"[direct] {loc.err:.5f}   [spectral] {spec.err:.5f}")
-    assert spec.err < loc.err
-    assert loc.niter == 0                      # a measurement, not an optimisation
-    assert loc.coeffs.shape == spec.coeffs.shape
+    fit = codec.encode(mesh, L=8, sphere=loc.sphere, method="quotient")
+    print(f"[direct] {loc.err:.5f}   [quotient] {fit.err:.5f}")
+    assert fit.err < loc.err
+    assert loc.coeffs.shape == fit.coeffs.shape
     X = codec.decode(loc.coeffs, loc.sphere)
     assert codec.shape_error(mesh.vertices, X) == pytest.approx(loc.err, rel=1e-9)
+
+
+def test_default_method_is_polyhedral_and_refuses_a_sphere():
+    """The default computes its own sphere map; a given sphere needs a method that
+    encodes against one, and the error says which."""
+    mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
+    assert codec.encode(mesh, L=4).meta["solver"] in ("exact", "fast")
+    with pytest.raises(ValueError, match="quotient"):
+        codec.encode(mesh, L=4, sphere=codec.base_sphere(mesh))
 
 
 def test_unknown_method_raises():
@@ -107,7 +97,7 @@ def test_encode_dataset_can_share_one_sphere():
     relative to the identical object."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
     T = codec.template_sphere(2)
-    coeffs, results = codec.encode_dataset(meshes, L=4, maxiter=20, sphere=T)
+    coeffs, results = codec.encode_dataset(meshes, L=4, sphere=T, method="quotient")
     assert coeffs.shape == (2, codec.n_coeffs(4))
     assert all(np.array_equal(r.sphere, T) for r in results)
 

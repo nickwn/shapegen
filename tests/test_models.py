@@ -249,11 +249,11 @@ def test_rho_fields_are_bandwidth_independent():
 
 
 def test_rho_fields_refuse_a_fitted_method():
-    """A ``spectral`` ρ *is* fitted at a specific bandwidth, so reusing it across
-    L would be silently wrong. Refuse rather than return something plausible."""
+    """A ``quotient`` ρ *is* fitted at a specific bandwidth, so reusing it across L
+    would be silently wrong. Refuse rather than return something plausible."""
     X, F, S = _bottles(n=2)
     with pytest.raises(ValueError, match="(?i)direct"):
-        RhoBasis(S, F, L=4, method="spectral").rho_fields(X)
+        RhoBasis(S, F, L=4, method="quotient").rho_fields(X)
 
 
 def test_rho_is_rotation_invariant():

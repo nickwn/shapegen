@@ -36,6 +36,11 @@ at cones within 1e-4 of an edge); the whole encode ~40 s, decoded vertex error
 0.083 (L = 16) / 0.068 (L = 32). Codes are tessellation-invariant to ~1e-6 (a hull
 vs its flat subdivisions; the projection's own floor is ~3e-7).
 
+Dense meshes (above ``EXACT_MAX_VERTICES``) go to the fast map instead
+(:mod:`~shapegen.geom.chord_map`): on the head ~4 s, 3.7e-4 rad from this map, and
+the same decode at L = 32 (vertex 0.0684, surface 0.0688; face region 0.0260
+against 0.0250).
+
 Scans break three things a clean polyhedron does not: rays from the vertex-mean
 centre that leave the face (:meth:`PolyMap.develop` re-centres), edges that pass
 clusters of cones at 1e-4 of their length (panelled curves,
@@ -44,8 +49,6 @@ minimal hinge lifts compose to −1 (a seam of sign flips, :meth:`PolyMap._seam`
 """
 
 from __future__ import annotations
-
-from functools import lru_cache
 
 import numpy as np
 import scipy.sparse as sp
@@ -65,6 +68,7 @@ RC = 1.2           # their check circle, in face radii: just outside the nodes (
                    # tree's block (≥ the check circle) stays small; no loss as RC > |ζ|/R_f
 HALF = 3.0         # far-field tree: the square |Re w|, |Im w| ≤ HALF of each global chart
 P_FMM = 56         # its expansion order (error ~0.64^P at a face's check circle)
+EXACT_MAX_VERTICES = 3000   # encode_polyhedral: the exact map up to here, the fast one above
 
 
 # ------------------------------------------------------------------ polyhedron data
@@ -113,6 +117,31 @@ def chart(R: np.ndarray, X: np.ndarray, inverse=False) -> np.ndarray:
 def _unstereo(z: np.ndarray) -> np.ndarray:
     r2 = np.abs(z) ** 2
     return np.stack([2 * z.real / (r2 + 1), 2 * z.imag / (r2 + 1), (r2 - 1) / (r2 + 1)], -1)
+
+
+def cone_gauge(V, F, a_v, X):
+    """The code's gauge of sphere positions ``X`` (per vertex) of the polyhedron
+    ``(V, F)`` with cone exponents ``a_v``: the ``|a|``-weighted cone centroid to 0
+    (exact), then the rotation that best matches the cones (``|a|``-weighted) to
+    their directions from the surface centroid. The rotation follows the input's
+    orientation instead of the start's, so the code is deterministic."""
+    from .conformal import ball_automorphism
+
+    ci = np.flatnonzero(a_v != 0)
+    w = np.abs(a_v[ci]) / np.abs(a_v[ci]).sum()
+    Sv = X                                                              # the cones are among the vertices
+    for _ in range(200):
+        cvec = w @ Sv[ci]
+        if np.linalg.norm(cvec) < 1e-13:
+            break
+        Sv = ball_automorphism(Sv, cvec / max(1.0, 2.0 * np.linalg.norm(cvec)))
+    Xc = Sv[ci]
+    E1, E2 = V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]
+    A = 0.5 * np.linalg.norm(np.cross(E1, E2), axis=1)
+    Y = _normalize(V[ci] - A @ V[F].mean(1) / A.sum())
+    U, _, Vt = np.linalg.svd((w[:, None] * Y).T @ Xc)                   # Kabsch: R X ≈ Y
+    R = U @ np.diag([1.0, 1.0, np.linalg.det(U @ Vt)]) @ Vt
+    return Sv @ R.T
 
 
 # ------------------------------------------------------------------ the cones a face sees
@@ -387,14 +416,6 @@ def _far_field(X, a, C, Rf, R, ptr, idx, an):
 
 
 # ------------------------------------------------------------------ W along rays
-@lru_cache(maxsize=None)
-def _gj(a: float, nq: int):
-    """Nodes/weights on [0, 1] for ``∫ (1−t)^a g(t) dt``."""
-    from scipy.special import roots_jacobi
-    x, w = roots_jacobi(nq, a, 0.0)
-    return (1 + x) / 2, w * 2.0 ** (-a - 1)
-
-
 def _segments(end, cones, own):
     """Split rays ``0 → end`` (one per row of ``cones``) into ``(ray, t0, t1)``
     segments, bisecting until every near cone but the endpoint's own (``own``, −1 if
@@ -704,25 +725,8 @@ class PolyMap:
         self.AB = np.linalg.solve(Mx, np.stack([self.E1, self.E2], 1) / np.exp(self.logc))
 
     def gauge_cones(self):
-        """Möbius-normalise: the ``|κ|``-weighted cone centroid to 0 (exact). Then
-        rotate so the cones best match (``|κ|``-weighted) their directions from the
-        surface centroid: the rotation follows the input's orientation instead of
-        the start's, so the code is deterministic."""
-        from .conformal import ball_automorphism
-
-        w = np.abs(self.a_v[self.ci])
-        X, Sv = self.sphere[self.ci], self.sphere
-        for _ in range(200):
-            cvec = (w[:, None] * X).sum(0) / w.sum()
-            if np.linalg.norm(cvec) < 1e-13:
-                break
-            step = cvec / max(1.0, 2.0 * np.linalg.norm(cvec))
-            X, Sv = ball_automorphism(X, step), ball_automorphism(Sv, step)
-        A = 0.5 * np.linalg.norm(np.cross(self.E1, self.E2), axis=1)
-        Y = _normalize(self.V[self.ci] - A @ self.V[self.F].mean(1) / A.sum())
-        U, _, Vt = np.linalg.svd((w[:, None] * Y).T @ X)                # Kabsch: R X ≈ Y
-        R = U @ np.diag([1.0, 1.0, np.linalg.det(U @ Vt)]) @ Vt
-        self.z = chart(self.Rm, Sv @ R.T)
+        """Möbius-normalise and rotate by the cones (:func:`cone_gauge`), then develop."""
+        self.z = chart(self.Rm, cone_gauge(self.V, self.F, self.a_v, self.sphere))
         self._faces(scale=True)
 
     # -------------------------------------------------------------- the code's quadrature
@@ -1198,7 +1202,6 @@ class PolyMap:
         from ..spectral.quaternion import qconj, qmul
 
         m = len(self.F)
-        P = chart(self.Rf[:, None], self.sphere[self.F])
         G = np.zeros(m, complex)
         xg = np.einsum("nji,nj->ni", self.Rf, _unstereo(G))
         lg, _ = self.spinor_at(xg, np.arange(m))
@@ -1337,19 +1340,32 @@ def solve_map(V, F) -> PolyMap:
 
 
 def encode_polyhedral(V, F, L: int, iters: int = 3, over: int = 3, lift=None,
-                      Ls: float | None = None, n_check: int = 6000) -> dict:
+                      Ls: float | None = None, n_check: int = 6000, exact: bool | None = None) -> dict:
     """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring).
 
     Returns ``{"coeffs", "sphere"`` (per vertex), ``"gamma", "f_hat",
-    "samples": (sphere points, weights, 3D points), "map": PolyMap, "info"}``;
-    ``samples`` are ``n_check`` points inside faces with their exact surface
-    points, to score a decode over the surface.
+    "samples": (sphere points, weights, 3D points), "map", "info"}``;
+    ``samples`` are ``n_check`` points inside faces with their surface points
+    under the map, to score a decode over the surface.
+
+    ``exact``: the exact map (this module) or the fast one
+    (:func:`~shapegen.geom.chord_map.encode_chord`: a discrete conformal map
+    corrected by local periods, a piecewise-Möbius spinor). ``None`` picks the
+    exact map up to ``EXACT_MAX_VERTICES`` vertices, where it takes ≲ 10 s and is
+    the better one on coarse polyhedra, and the fast one above (a 26k-vertex scan:
+    ~4 s instead of ~20 min, decoding as well).
     """
+    if exact is None:
+        exact = len(V) <= EXACT_MAX_VERTICES
+    if not exact:
+        from .chord_map import encode_chord
+
+        return encode_chord(V, F, L, iters=iters, over=over, lift=lift, Ls=Ls, n_check=n_check)
     from ..quad.lift import frame_quaternion
     from ..spectral.quaternion import qconj, qmul
-    from .dirac_direct import _project_faces, close_code
+    from .dirac_quotient import _project_faces, close_code
     from .dirac_quotient import rho_quotient
-    from .spectral_adjoint import SpectralLift
+    from ..quad.lift import SpectralLift
 
     V, F = np.asarray(V, float), np.asarray(F)
     pm = solve_map(V, F)
@@ -1371,7 +1387,7 @@ def encode_polyhedral(V, F, L: int, iters: int = 3, over: int = 3, lift=None,
     fc = np.repeat(fs, 3)
     xc = np.einsum("nji,nj->ni", pm.Rf[fc], _unstereo(zc))
     Xc = pm.surface_points(zc, fc)
-    info = dict(fit=pm.fit, ncones=len(pm.ci), nodes=len(xs), sphere_weight=float(w.sum()),
+    info = dict(solver="exact", fit=pm.fit, ncones=len(pm.ci), nodes=len(xs), sphere_weight=float(w.sum()),
                 jump_err=pm.jump_err, sign_defects=pm.sign_defects, curve_err=pm.curve_err,
                 recentred=pm.recentred, odd_vertices=pm.odd_vertices, sign_seam=pm.sign_seam)
     return {"coeffs": rho, "sphere": pm.sphere, "gamma": gamma,

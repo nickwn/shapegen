@@ -70,13 +70,12 @@ def main() -> None:
     ap.add_argument("--n", type=int, default=16, help="number of shapes")
     ap.add_argument("--subdiv", type=int, default=3)
     ap.add_argument("--L", type=int, default=12, help="SH bandwidth of the latent")
-    ap.add_argument("--maxiter", type=int, default=200)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--method", choices=codec.METHODS, default="direct",
                     help="direct: rho measured and projected, milliseconds per "
                          "mesh, comparable across meshes (what training uses). "
-                         "spectral: adjoint through the mesh-free decoder, ~5x "
-                         "more accurate, minutes per mesh")
+                         "quotient: the Dirac equation read off the target's "
+                         "spinor, several times more accurate, ~1 s per mesh")
     ap.add_argument("--out", type=str, default="reports/dataset.npz")
     args = ap.parse_args()
 
@@ -89,16 +88,12 @@ def main() -> None:
 
     t0 = time.perf_counter()
     coeffs, results = codec.encode_dataset(meshes, args.L, method=args.method,
-                                           sphere=template, maxiter=args.maxiter,
-                                           n_jobs=-1, verbose=True)
+                                           sphere=template, n_jobs=-1, verbose=True)
     dt = time.perf_counter() - t0
 
     errs = np.array([r.err for r in results])
-    capped = sum(0 if r.converged else 1 for r in results)
     print(f"\nencoded {args.n} shapes in {dt:.0f}s ({dt/args.n:.0f}s each)")
     print(f"  reconstruction err  mean {errs.mean():.4f}  max {errs.max():.4f}")
-    print(f"  iteration-capped    {capped}/{args.n}"
-          + ("   <- raise --maxiter; these are upper bounds" if capped else ""))
     print(f"  code norms          mean {np.linalg.norm(coeffs, axis=1).mean():.3f}"
           f"  spread {np.linalg.norm(coeffs, axis=1).std():.3f}")
 

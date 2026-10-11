@@ -1,5 +1,6 @@
 """The quotient encoder (:mod:`shapegen.geom.dirac_quotient`) and the two pieces
-it rests on: the separable face projection in ``dirac_direct.mesh_spinor`` and
+it rests on: the spinor read off a mesh (:func:`~shapegen.geom.dirac_quotient.mesh_spinor`,
+its separable face projection) and
 the spanning-tree sign alignment in ``spin.face_spinors``."""
 
 from __future__ import annotations
@@ -8,7 +9,7 @@ import numpy as np
 import pytest
 
 from shapegen import codec
-from shapegen.geom import dirac_direct as dd, dirac_quotient as dq, dirac_spectral as ds, spin
+from shapegen.geom import dirac_quotient as dq, dirac_spectral as ds, spin
 from shapegen.geom.encode import n_coeffs
 from shapegen.geom.mesh import icosphere
 from shapegen.spectral import swsh as sw
@@ -49,8 +50,26 @@ def test_face_projection_matches_exact_ladders():
     g1, g2 = rng.standard_normal((2, 3000)) + 1j * rng.standard_normal((2, 3000))
     exact = np.r_[sw.half_eval_adjoint(+0.5, 12.5, th, ph, g1),
                   sw.half_eval_adjoint(-0.5, 12.5, th, ph, g2)]
-    fast = dd._project_faces(12.5, th, ph, g1, g2)
+    fast = dq._project_faces(12.5, th, ph, g1, g2)
     assert np.linalg.norm(fast - exact) < 1e-5 * np.linalg.norm(exact)
+
+
+def test_mesh_spinor_converges_on_a_decoded_surface(closed):
+    """λ read off a mesh of a decoded surface (per-face similarities, projected by
+    quadrature) converges to the decoder's spinor at second order in the mesh size."""
+    from shapegen.geom.encode import real_sh_basis
+    from shapegen.quad.lift import SpectralLift
+
+    _rho, v = closed
+    lift = SpectralLift(LS)
+    fh = lift.forward(v)[0]
+    errs = []
+    for k in (3, 4):
+        S, F = _sphere(k)
+        vT = dq.mesh_spinor(S, real_sh_basis(S, lift.Lf) @ fh, F, LS)
+        vT = vT * np.sign(np.real(np.vdot(v, vT)))           # global sign is a gauge
+        errs.append(np.linalg.norm(vT - v) / np.linalg.norm(v))
+    assert errs[1] < 5e-3 and errs[1] < 0.35 * errs[0], errs     # 0.0089 -> 0.0021
 
 
 def test_signs_smooth_field_is_one_global_sign():
@@ -112,10 +131,9 @@ def test_rho_quotient_pads_a_lower_band_spinor(closed):
     assert np.allclose(dq.rho_quotient(vt, L, LS, Lm), dq.rho_quotient(vp, L, LS))
 
 
-def test_codec_quotient_between_direct_and_dirac():
-    """Always better than ``direct``. Against ``dirac`` it depends on shape and
-    band: this bottle is 1.6x off at L=8 and 0.97x at L=16 (heads 1.0-1.1x at
-    every L), because ``dirac``'s resolvent weighting has no cheap analogue."""
+def test_codec_quotient_beats_direct():
+    """Decodes to exactly the error it reports, closed (γ ≈ 0), and well below the
+    ``direct`` measurement; ``close=False`` moves only ``ℓ = 0``."""
     from shapegen.data.dataset import demo_bottle_meshes
 
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
@@ -126,5 +144,3 @@ def test_codec_quotient_between_direct_and_dirac():
     assert r.err < 0.6 * codec.encode(mesh, L, sphere=sph, method="direct").err, r      # 0.021 vs 0.043
     fast = dq.encode_quotient(mesh.vertices, sph, mesh.faces, L, close=False)["coeffs"]
     assert np.allclose(fast[1:], r.coeffs[1:])                  # closing moves only ℓ = 0
-    r16 = codec.encode(mesh, 16, sphere=sph, method="quotient")
-    assert r16.err < 1.1 * codec.encode(mesh, 16, sphere=sph, method="dirac").err, r16

@@ -85,11 +85,11 @@ def test_sphere_map_refuses_coarse_meshes_clearly():
 
 def test_coarse_cube_decodes_like_any_cube():
     L = 8
-    r = codec.encode(Mesh(*cube(1)), L, method="dirac")     # 12 triangles: auto-remeshed
+    r = codec.encode(Mesh(*cube(1)), L, method="quotient")     # 12 triangles: auto-remeshed
     assert r.sphere.shape == (8, 3) and "refined_mesh" in r.meta
     assert r.meta["err_surface"] < 0.04                      # the band limit at L=8: 0.033
     assert codec.shape_error(cube(1)[0], codec.decode(r.coeffs, r.sphere)) == pytest.approx(r.err)
-    ref = _spectrum(codec.encode(Mesh(*cube(16)), L, method="dirac", refine=True).coeffs, L)
+    ref = _spectrum(codec.encode(Mesh(*cube(16)), L, method="quotient", refine=True).coeffs, L)
     for V, F in (cube(1), fan_cube()):
-        p = _spectrum(codec.encode(Mesh(V, F), L, method="dirac").coeffs, L)
+        p = _spectrum(codec.encode(Mesh(V, F), L, method="quotient").coeffs, L)
         assert np.linalg.norm(p - ref) < 1e-4 * np.linalg.norm(ref)   # measured 1-3e-6

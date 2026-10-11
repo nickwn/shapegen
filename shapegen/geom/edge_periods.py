@@ -156,51 +156,60 @@ def _unflatten(V, F, flat):
 
     if not (angles(L) > flat).any():
         return F, L
-    key, twin = {}, -np.ones((m, 3), np.int64)
-    for f in range(m):
-        for c in range(3):
-            a, b = int(F[f, (c + 1) % 3]), int(F[f, (c + 2) % 3])
-            if (b, a) in key:
-                g = key.pop((b, a))
-                twin[f, c], twin[g // 3, g % 3] = g, 3 * f + c
-            else:
-                key[(a, b)] = 3 * f + c
+    # twin of each side (face*3 + corner): the side with the same end points, reversed
+    n = int(F.max()) + 1
+    a_, b_ = F[:, [1, 2, 0]].ravel(), F[:, [2, 0, 1]].ravel()
+    fwd, rev = a_ * n + b_, b_ * n + a_
+    o = np.argsort(fwd)
+    twin = -np.ones(3 * m, np.int64)
+    pos = np.searchsorted(fwd[o], rev)
+    hit = (pos < len(o)) & (fwd[o][np.minimum(pos, len(o) - 1)] == rev)
+    twin[hit] = o[pos[hit]]
+    twin = twin.reshape(m, 3)
     stack = [tuple(x) for x in np.argwhere(angles(L) > flat)]
-    F, L, twin = F.tolist(), L.tolist(), twin.tolist()
-    pairs = {(min(F[f][(c + 1) % 3], F[f][(c + 2) % 3]), max(F[f][(c + 1) % 3], F[f][(c + 2) % 3]))
-             for f in range(m) for c in range(3)}
+    # joined vertex pairs: the mesh's edges (sorted keys) plus / minus those the flips change
+    base = np.unique(np.minimum(a_, b_) * n + np.maximum(a_, b_))
+    added, removed = set(), set()
+
+    def joined(key):
+        if key in added:
+            return True
+        k_ = np.searchsorted(base, key)
+        return key not in removed and k_ < len(base) and base[k_] == key
 
     def angle(f, c):
-        a, b, d = L[f][c], L[f][(c + 1) % 3], L[f][(c + 2) % 3]
+        a, b, d = L[f, c], L[f, (c + 1) % 3], L[f, (c + 2) % 3]
         return np.arccos(min(1.0, max(-1.0, (b * b + d * d - a * a) / (2 * b * d))))
 
     def link(f, c, t):
-        twin[f][c] = t
-        twin[t // 3][t % 3] = 3 * f + c
+        twin[f, c] = t
+        twin[t // 3, t % 3] = 3 * f + c
 
     for _ in range(100 * len(stack) + 100):
         if not stack:
             break
-        f, c = stack.pop()
-        f2, c2 = divmod(twin[f][c], 3)
+        f, c = (int(v) for v in stack.pop())
+        f2, c2 = divmod(int(twin[f, c]), 3)
         if angle(f, c) <= flat or angle(f, c) + angle(f2, c2) <= np.pi:
             continue
-        a, i, j, b = F[f][c], F[f][(c + 1) % 3], F[f][(c + 2) % 3], F[f2][c2]   # f = (a, i, j), f2 = (b, j, i)
-        if a == b or (min(a, b), max(a, b)) in pairs:
+        a, i, j, b = int(F[f, c]), int(F[f, (c + 1) % 3]), int(F[f, (c + 2) % 3]), int(F[f2, c2])   # f = (a, i, j), f2 = (b, j, i)
+        if a == b or joined(min(a, b) * n + max(a, b)):
             continue
-        l_ja, l_ai = L[f][(c + 1) % 3], L[f][(c + 2) % 3]
-        l_ib, l_bj = L[f2][(c2 + 1) % 3], L[f2][(c2 + 2) % 3]
+        l_ja, l_ai = L[f, (c + 1) % 3], L[f, (c + 2) % 3]
+        l_ib, l_bj = L[f2, (c2 + 1) % 3], L[f2, (c2 + 2) % 3]
         ang_i = angle(f, (c + 1) % 3) + angle(f2, (c2 + 2) % 3)
         l_ab = np.sqrt(max(l_ai ** 2 + l_ib ** 2 - 2 * l_ai * l_ib * np.cos(ang_i), 0.0))
-        t_ja, t_ai, t_ib, t_bj = twin[f][(c + 1) % 3], twin[f][(c + 2) % 3], twin[f2][(c2 + 1) % 3], twin[f2][(c2 + 2) % 3]
+        t_ja, t_ai = int(twin[f, (c + 1) % 3]), int(twin[f, (c + 2) % 3])
+        t_ib, t_bj = int(twin[f2, (c2 + 1) % 3]), int(twin[f2, (c2 + 2) % 3])
         F[f], L[f] = [a, i, b], [l_ib, l_ab, l_ai]
         F[f2], L[f2] = [b, j, a], [l_ja, l_ab, l_bj]
         link(f, 0, t_ib); link(f, 2, t_ai); link(f2, 0, t_ja); link(f2, 2, t_bj)
-        twin[f][1], twin[f2][1] = 3 * f2 + 1, 3 * f + 1
-        pairs.discard((min(i, j), max(i, j)))
-        pairs.add((min(a, b), max(a, b)))
+        twin[f, 1], twin[f2, 1] = 3 * f2 + 1, 3 * f + 1
+        k_old, k_new = min(i, j) * n + max(i, j), min(a, b) * n + max(a, b)
+        added.discard(k_old); removed.add(k_old)
+        removed.discard(k_new); added.add(k_new)
         stack += [(f, cc) for cc in range(3)] + [(f2, cc) for cc in range(3)]
-    return np.array(F), np.array(L)
+    return F, L
 
 
 def _arnoldi(Av, b, kmax, rtol):
@@ -274,9 +283,7 @@ class EdgeSystem:
         self.logl = np.log(Lf.ravel()[first])
         # per face corner c: the corner k, the other two i, j (face order k, i, j) and
         # the edges k-i, k-j, i-j, for the class fix in :meth:`lengths`
-        eid = lambda p, q: np.searchsorted(uk, np.minimum(p, q) * n + np.maximum(p, q))   # noqa: E731
-        k, i, j = Fr.T, np.roll(Fr, -1, 1).T, np.roll(Fr, -2, 1).T
-        self.corner = dict(k=k, i=i, j=j, eki=eid(k, i), ekj=eid(k, j), eij=eid(i, j))
+        self._uk = uk                                                   # :attr:`corner`, built when first used
         ang = np.stack([np.arccos(np.clip((Lf[:, (c + 1) % 3] ** 2 + Lf[:, (c + 2) % 3] ** 2 - Lf[:, c] ** 2)
                                           / (2 * Lf[:, (c + 1) % 3] * Lf[:, (c + 2) % 3]), -1, 1))
                         for c in range(3)], 1)
@@ -289,6 +296,17 @@ class EdgeSystem:
         self.frozen = None
         self._prec = (NQ, P_FMM)
         self._rep = None
+
+    @property
+    def corner(self):
+        """Per face corner ``c``: the corner ``k``, the other two ``i, j`` (face order ``k, i,
+        j``) and the edges ``k-i``, ``k-j``, ``i-j``, for the class fix in :meth:`lengths`."""
+        if "_corner" not in self.__dict__:
+            n, uk, Fr = self.n, self._uk, self.F
+            eid = lambda p, q: np.searchsorted(uk, np.minimum(p, q) * n + np.maximum(p, q))   # noqa: E731
+            k, i, j = Fr.T, np.roll(Fr, -1, 1).T, np.roll(Fr, -2, 1).T
+            self._corner = dict(k=k, i=i, j=j, eki=eid(k, i), ekj=eid(k, j), eij=eid(i, j))
+        return self._corner
 
     # ------------------------------------------------------------------ periods
     def _far_fields(self, X, mask, cone_in):

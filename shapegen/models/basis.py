@@ -97,8 +97,8 @@ class RhoBasis:
 
     ``method="direct"`` (default) is what training uses: milliseconds per mesh,
     a measurement comparable across meshes, and its fields are reusable across
-    ``L``. ``method="spectral"`` runs the adjoint encoder per mesh against the
-    shared sphere -- ~5x more accurate, minutes per mesh.
+    ``L``. ``method="quotient"`` (or ``"polyhedral"``) fits each mesh against the
+    shared sphere -- several times more accurate, about a second per mesh.
     """
 
     def __init__(self, sphere, faces, L, method="direct", mean=None, scale=None):
@@ -118,8 +118,8 @@ class RhoBasis:
         so compute the fields once and pass them as ``fields=`` to :meth:`fit` /
         :meth:`encode`, or cache them with ``scripts/encode_faces.py``.
 
-        Only for ``method="direct"``: a ``spectral`` code is fitted at a
-        specific bandwidth and cannot be reused across L.
+        Only for ``method="direct"``: the other methods fit a code at a specific
+        bandwidth, which cannot be reused across L.
         """
         from ..geom.mesh import Mesh  # noqa: PLC0415
         from ..geom.spin import mesh_to_rho_direct  # noqa: PLC0415

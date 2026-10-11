@@ -28,7 +28,7 @@ band `L` (so `(L+1)²` numbers), of a scalar **ρ** on the unit sphere. ρ is th
 Public API (`shapegen/codec.py`):
 
 ```python
-res = codec.encode(mesh, L=32, method="quotient")   # or "dirac", "spectral", "direct"
+res = codec.encode(mesh, L=32)                       # method="polyhedral" (default), "quotient", "direct"
 X   = codec.decode(res.coeffs, res.sphere)           # positions at res.sphere points
 err = codec.shape_error(mesh.vertices, X)            # == res.err (similarity-invariant)
 ```
@@ -62,7 +62,7 @@ vertex.
 
 ## 2. Spectral decode (ρ̂ → surface)
 
-Code: `geom/dirac_spectral.py` (spinor) and `geom/spectral_adjoint.SpectralLift`
+Code: `geom/dirac_spectral.py` (spinor) and `quad/lift.SpectralLift`
 (positions). Entry point: `quad/lift.lift_spectral` / `codec.decode`. No mesh is
 involved anywhere.
 
@@ -96,8 +96,6 @@ The Kamberov–Pedit–Pinkall pair becomes the linear operator
   - Adding a constant to ρ shifts every eigenvalue and leaves every eigenvector
     unchanged. So **ℓ=0 of ρ̂ does not change the decoded surface.**
   - `close_potential` sets ℓ=0 so that γ = 0 exactly (the code is then "closed").
-  - At γ = 0 exactly, G is singular. The adjoint in the optimiser needs a small
-    nonzero γ while fitting.
 - **γ meaning.** γ is the residual. The realised curvature is `ρ − γ`.
 
 ### 2b. Spinor → quaternion field (the dictionary), `quad/lift.frame_quaternion`
@@ -132,8 +130,8 @@ coefficient.
 
 ## 3. Quotient encode (mesh → ρ̂), `method="quotient"`
 
-Code: `geom/dirac_quotient.py` (`rho_quotient`, `encode_quotient`) and
-`geom/dirac_direct.py` (`mesh_spinor`, `_project_faces`, `close_code`). Tests:
+Code: `geom/dirac_quotient.py` (`mesh_spinor`, `_project_faces`, `rho_quotient`,
+`close_code`, `encode_quotient`). Tests:
 `tests/test_dirac_quotient.py`. There is no optimiser and no dense matrix.
 
 **Idea.** The decoder solves `Dψ = ρψ` for ψ given ρ. Encoding runs that backwards:
@@ -148,8 +146,8 @@ read the target's ψ off the mesh, then solve the same equation for ρ.
    propagated along a **minimum spanning tree on `2 − |cos∠(λ_f, λ_g)|`** of the dual
    graph, with parity computed by pointer jumping.
    - **Trap:** a breadth-first tree runs a sign seam across the surface around folded
-     triangles. On FaceScape head 10 of `trainset_001_100` that made `dirac` decode
-     at 0.48 against ~0.007.
+     triangles. On FaceScape head 10 of `trainset_001_100` that made the (since
+     removed) `dirac` encoder decode at 0.48 against ~0.007.
 3. **Remove the decoder frame** at each face centroid: `raw = R⁻¹ λ` gives
    `ψ1 = raw0 + i·raw1` and `ψ2 = raw2 − i·raw3`.
 4. **Project onto spin ±½ SH by quadrature**, weighted by sphere-triangle area
@@ -162,7 +160,7 @@ read the target's ψ off the mesh, then solve the same equation for ρ.
    face count.
 
 **Use `Lm = L + ½`, not `Ls`.** This was measured as more accurate as well as
-cheaper: 1.20× vs 1.32× off `dirac` before step 3.
+cheaper (10% better before step 3).
 
 ### Step 2: pointwise quotient (first pass)
 
@@ -174,7 +172,7 @@ vector is a prefix of each spin's band-Ls modes. Then:
 
 - Use **no weight**. Weighting by `|ψ|^p` gets worse as p rises. The textbook least
   squares `min ‖G(ρ̂)v‖` is also worse (0.0137 vs 0.0085 on one head).
-- This pass alone is 1.23× off `dirac` (whole head) and 1.15× (face).
+- This pass alone is ~10% worse than the corrected result (step 3).
 
 ### Step 3: correct onto the decoder's truncated equation (passes 2–3)
 
@@ -197,25 +195,22 @@ equation. It falls ~7% short at high ℓ. Iterate:
 surface; it only selects the right kernel.
 
 `encode_quotient(close=True)` (what the codec calls) spends one `solve_spinor`,
-warm-started at v, to close exactly (`dirac_direct.close_code`, γ ≈ 1e-14). It
+warm-started at v, to close exactly (`close_code`, γ ≈ 1e-14). It
 reuses that solve for `f̂`, which is used for scoring. `close=False` skips the solve.
 
 ### Numbers (L=32, ico5 FaceScape heads, same sphere for every method)
 
-| method | error vs `dirac` (whole / face) | encode time |
+| method | error (whole / face) | encode time |
 |---|---|---|
-| `direct` (mesh curvature `H·e^u − 1`, projected) | 3.41× / 3.62× | 170 ms |
-| **`quotient`** | **1.11× / 1.06×** (worst head 1.13×) | **80 ms** encode (`close=False`); ~0.74 s in `codec.encode` |
-| `dirac` (reweighted Dirac least squares) | 1 | ~1.0 s |
-| `spectral` (L-BFGS fit through the decoder) | ~0.72× | ~28 s |
+| `direct` (mesh curvature `H·e^u − 1`, projected) | ~0.024 / 0.022 | 170 ms |
+| **`quotient`** | **~0.0077 / 0.0065** | **80 ms** encode (`close=False`); ~0.74 s in `codec.encode` |
 
-- Codes move 3% between ico5 and ico6 meshings, the same as `dirac` (`direct`: 4.4%).
-  The quotient is a deterministic *measurement*.
-- **Where it is weaker:** smooth shapes at low L. The demo bottle is 1.6–1.75× off at
-  L=8 and 1.2× at L=16–24. Use `dirac` at L ≤ 16; it costs about the same there.
-- **At L=64** (head 339): quotient 1.4 s encode, `dirac` 44 s / 6.6 GB, decode
-  ~13 s. `spectral` from ρ̂=0 **breaks**: 53 min, shape error 0.0055 vs `dirac`'s
-  0.0025, with visible ringing.
+- Codes move 3% between ico5 and ico6 meshings (`direct`: 4.4%). The quotient is a
+  deterministic *measurement*.
+- **Where it is weaker:** smooth shapes at low L. The removed `dirac` encoder (dense,
+  resolvent-weighted least squares) matched it on heads but was 1.6–1.75× better on
+  the demo bottle at L=8 and 1.2× at L=16–24.
+- **At L=64** (head 339): quotient 1.4 s encode, decode ~13 s.
 
 ---
 

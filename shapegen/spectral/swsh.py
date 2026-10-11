@@ -34,11 +34,9 @@ from scipy.special import gammaln
 from .grids import gl_grid, solid_angle_weights
 
 __all__ = [
-    "wigner_d", "wigner_d_ladder", "swsh", "basis_matrix", "empty_coeffs", "synth", "analy",
-    "edth", "edthbar", "edth_factor", "edthbar_factor",
-    "spin_laplacian", "laplacian_eig", "hopf_scaling", "q_from_sigma",
-    "mode_list", "eval_basis", "fit_coeffs",
-    "euler_zyz", "wigner_D", "rotate_coeffs",
+    "wigner_d_ladder", "swsh", "basis_matrix", "empty_coeffs", "synth", "analy",
+    "edth", "edthbar", "spin_laplacian", "laplacian_eig", "hopf_scaling", "q_from_sigma",
+    "mode_list", "eval_basis",
     "half_modes", "half_grid", "half_basis", "half_synth", "half_analy",
     "half_edth_factor", "half_edthbar_factor", "half_eval_basis", "half_eval_adjoint",
 ]
@@ -112,21 +110,6 @@ def wigner_d_ladder(lmax: float, a: float, b: float, theta: np.ndarray):
                       ) / (l * np.sqrt(((l + 1) ** 2 - a * a)
                                        * ((l + 1) ** 2 - b * b)))
     return ls, out
-
-
-def wigner_d(l, a, b, theta: np.ndarray) -> np.ndarray:
-    """Wigner small-d ``d^l_{a,b}(θ)``, by :func:`wigner_d_ladder`.
-
-    ``theta`` may be an array; the result has the same shape. ``l``, ``a`` and
-    ``b`` may be integers or all half-integers. Computing one degree at a time
-    throws away the ladder, so callers that need a whole range of ℓ (the basis
-    builders below) should call :func:`wigner_d_ladder` directly.
-    """
-    theta_a = np.asarray(theta, dtype=float)
-    if abs(a) > l or abs(b) > l:
-        return np.zeros_like(theta_a)
-    _ls, d = wigner_d_ladder(l, a, b, theta_a.ravel())
-    return d[-1].reshape(theta_a.shape)
 
 
 # ---------------------------------------------------------------------------
@@ -226,18 +209,6 @@ def edthbar(C: np.ndarray, s: int) -> np.ndarray:
     return out
 
 
-def edth_factor(L: int, s: int) -> np.ndarray:
-    """Per-degree ð factors ``√((ℓ−s)(ℓ+s+1))`` for ℓ ∈ [0, L]."""
-    l = np.arange(L + 1)
-    return np.sqrt(np.clip((l - s) * (l + s + 1), 0, None))
-
-
-def edthbar_factor(L: int, s: int) -> np.ndarray:
-    """Per-degree ð̄ factors ``−√((ℓ+s)(ℓ−s+1))`` for ℓ ∈ [0, L]."""
-    l = np.arange(L + 1)
-    return -np.sqrt(np.clip((l + s) * (l - s + 1), 0, None))
-
-
 def spin_laplacian(C: np.ndarray, s: int) -> np.ndarray:
     """Spin-``s`` Laplacian ``Δ_s = ½(ðð̄ + ð̄ð)`` applied to ``C``."""
     a = edthbar(edth(C, s), s + 1)   # ð then ð̄: spin s -> s+1 -> s
@@ -293,78 +264,9 @@ def eval_basis(s: int, L: int, theta: np.ndarray, phi: np.ndarray) -> np.ndarray
     return Y
 
 
-def fit_coeffs(s: int, L: int, theta, phi, values, weights=None,
-               rcond=1e-8) -> np.ndarray:
-    """Least-squares spin-``s`` coefficients from scattered samples.
-
-    Minimizes ``Σ_i w_i |Σ_{ℓm} C_{ℓm} ₍s₎Y_{ℓm}(θ_i,φ_i) − values_i|²`` and
-    returns ``C`` in the dense ``C[ℓ, ℓ+m]`` layout. Use for fields known only
-    on an irregular spherical mesh (e.g. the conformal Hopf field).
-    """
-    theta = np.asarray(theta, float).ravel()
-    phi = np.asarray(phi, float).ravel()
-    v = np.asarray(values, complex).ravel()
-    Y = eval_basis(s, L, theta, phi)
-    if weights is not None:
-        sw = np.sqrt(np.asarray(weights, float).ravel())
-        Y = Y * sw[:, None]
-        v = v * sw
-    sol, *_ = np.linalg.lstsq(Y, v, rcond=rcond)
-    C = empty_coeffs(L)
-    for col, (l, m) in enumerate(mode_list(s, L)):
-        C[l, l + m] = sol[col]
-    return C
-
-
 # ---------------------------------------------------------------------------
 # Wigner-D rotation of coefficients (rotation augmentation in σ-space)
 # ---------------------------------------------------------------------------
-
-def euler_zyz(R: np.ndarray):
-    """ZYZ Euler angles ``(α, β, γ)`` of an active rotation
-    ``R = R_z(α) R_y(β) R_z(γ)``."""
-    R = np.asarray(R, float)
-    beta = np.arccos(np.clip(R[2, 2], -1.0, 1.0))
-    if np.sin(beta) > 1e-9:
-        alpha = np.arctan2(R[1, 2], R[0, 2])
-        gamma = np.arctan2(R[2, 1], -R[2, 0])
-    else:                                   # gimbal: fold γ into α
-        alpha = np.arctan2(R[1, 0], R[0, 0])
-        gamma = 0.0
-    return alpha, beta, gamma
-
-
-def wigner_D(l: int, R: np.ndarray) -> np.ndarray:
-    """Wigner-D matrix ``D^ℓ_{m'm}(R) = e^{-im'α} d^ℓ_{m'm}(β) e^{-imγ}`` (active
-    convention), shape ``(2ℓ+1, 2ℓ+1)`` indexed by ``m', m ∈ [-ℓ, ℓ]``.
-
-    Self-contained (reuses :func:`wigner_d`); verified in tests against the
-    grid-rotation ground truth and the ``spherical`` oracle.
-    """
-    a, b, g = euler_zyz(R)
-    bt = np.array([b])
-    D = np.empty((2 * l + 1, 2 * l + 1), dtype=complex)
-    for mp in range(-l, l + 1):
-        for mm in range(-l, l + 1):
-            D[mp + l, mm + l] = (np.exp(-1j * mp * a)
-                                 * wigner_d(l, mp, mm, bt)[0]
-                                 * np.exp(-1j * mm * g))
-    return D
-
-
-def rotate_coeffs(C: np.ndarray, R: np.ndarray) -> np.ndarray:
-    """Rotate coefficients by ``R`` (per degree ``a'_{ℓm'} = Σ_m D^ℓ_{m'm} a_{ℓm}``)
-    so the implied field becomes ``f(R^{-1}·)``. Works for any spin (the D^ℓ are
-    spin-independent)."""
-    L = C.shape[0] - 1
-    out = empty_coeffs(L)
-    for l in range(L + 1):
-        if l == 0:
-            out[0, 0] = C[0, 0]
-            continue
-        out[l, 0:2 * l + 1] = wigner_D(l, R) @ C[l, 0:2 * l + 1]
-    return out
-
 
 # ---------------------------------------------------------------------------
 # Half-integer degrees and spins

@@ -10,19 +10,9 @@ from __future__ import annotations
 import numpy as np
 from scipy.spatial import cKDTree
 
-from ..geom.curvature import mean_curvature
 from ..geom.mesh import Mesh, face_normals
-from ..geom.operators import vertex_areas
 
-__all__ = ["willmore_energy", "flip_fraction", "genus", "chamfer",
-           "nose_tip", "chamfer_region",
-           "triangle_quality"]
-
-
-def willmore_energy(V, F) -> float:
-    """Discrete ``W = ∫ H² dA`` (≥ 4π for a smooth genus-0 surface)."""
-    H, _, _ = mean_curvature(V, F)
-    return float((H ** 2 * vertex_areas(V, F)).sum())
+__all__ = ["flip_fraction", "genus", "chamfer", "nose_tip", "chamfer_region"]
 
 
 def flip_fraction(V, F) -> float:
@@ -116,17 +106,3 @@ def chamfer_region(A, B, centre, radius: float) -> float:
     db, _ = cKDTree(A).query(B[mb])
     return 0.5 * (da.mean() + db.mean())
 
-
-def triangle_quality(V, F) -> dict:
-    """Triangle-angle quality: min angle (deg) and its distribution."""
-    ang = np.zeros((len(F), 3))
-    for k in range(3):
-        i, j, l = F[:, k], F[:, (k + 1) % 3], F[:, (k + 2) % 3]
-        u = V[j] - V[i]
-        w = V[l] - V[i]
-        u /= np.maximum(np.linalg.norm(u, axis=1, keepdims=True), 1e-30)
-        w /= np.maximum(np.linalg.norm(w, axis=1, keepdims=True), 1e-30)
-        ang[:, k] = np.degrees(np.arccos(np.clip((u * w).sum(1), -1, 1)))
-    mn = ang.min(1)
-    return {"min_angle": float(mn.min()), "mean_min_angle": float(mn.mean()),
-            "frac_below_20deg": float((mn < 20).mean())}

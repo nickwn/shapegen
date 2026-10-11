@@ -16,25 +16,6 @@ from shapegen.geom.operators import cotan_laplacian
 # Closed-form ellipsoid curvature (implicit-surface formulas)                 #
 # --------------------------------------------------------------------------- #
 
-def ellipsoid_HK(P, axes):
-    """Exact (H, K) at points P on Σ(x_i/a_i)²=1, outward/convex-positive."""
-    a, b, c = axes
-    g = 2.0 * np.stack([P[:, 0] / a**2, P[:, 1] / b**2, P[:, 2] / c**2], axis=1)
-    gn = np.linalg.norm(g, axis=1)
-    hess = np.diag([2.0 / a**2, 2.0 / b**2, 2.0 / c**2])
-    gHg = (g @ hess * g).sum(1)
-    trH = np.trace(hess)
-    # mean curvature (negate so the outward normal gives +1/R on a sphere)
-    H = -(gHg - gn**2 * trH) / (2.0 * gn**3)
-    adj = np.diag([
-        (2.0 / b**2) * (2.0 / c**2),
-        (2.0 / a**2) * (2.0 / c**2),
-        (2.0 / a**2) * (2.0 / b**2),
-    ])
-    K = (g @ adj * g).sum(1) / gn**4
-    return H, K
-
-
 # --------------------------------------------------------------------------- #
 # Test 3a: unit sphere — H→1, K→1, q→0; convergence with resolution           #
 # --------------------------------------------------------------------------- #

@@ -53,60 +53,35 @@ def test_band_index_matches_layout():
     assert list(enc.band_index(2)) == [0, 1, 1, 1, 2, 2, 2, 2, 2]
 
 
-# --------------------------------------------------------------------------- #
-# The objective                                                               #
-# --------------------------------------------------------------------------- #
+def test_eval_real_sh_is_the_basis_product():
+    """:func:`eval_real_sh` evaluates ``real_sh_basis(V, L) @ c`` without building the
+    basis, including at the poles (where ``φ`` is undefined)."""
+    rng = np.random.default_rng(2)
+    V = np.r_[rng.standard_normal((300, 3)), [[0, 0, 1.0], [0, 0, -2.0]]]
+    for L in (0, 3, 20):
+        c = rng.standard_normal((enc.n_coeffs(L), 2))
+        ref = enc.real_sh_basis(V, L) @ c
+        assert np.abs(enc.eval_real_sh(V, c, L) - ref).max() < 1e-12 * np.abs(ref).max()
+        assert np.allclose(enc.eval_real_sh(V, c[:, 0], L), ref[:, 0])
 
-def test_procrustes_gradient_matches_fd():
-    rng = np.random.default_rng(0)
-    A = rng.standard_normal((30, 3))
-    X = A + 0.3 * rng.standard_normal((30, 3))
-    _, g = enc.procrustes(A, X)
-    h = 1e-7
-    gfd = np.empty_like(X)
-    for v in range(len(X)):
-        for c in range(3):
-            xp, xm = X.copy(), X.copy()
-            xp[v, c] += h
-            xm[v, c] -= h
-            gfd[v, c] = (enc.procrustes(A, xp)[0] - enc.procrustes(A, xm)[0]) / (2 * h)
-    assert np.linalg.norm(g - gfd) / np.linalg.norm(gfd) < 1e-6
-    assert float((g * gfd).sum() / (gfd * gfd).sum()) == pytest.approx(1.0, abs=1e-6)
 
+# --------------------------------------------------------------------------- #
+# Procrustes                                                                  #
+# --------------------------------------------------------------------------- #
 
 def test_procrustes_is_similarity_invariant():
-    """Rotation, translation and scale invariance — the gauge-invariance the
-    adjoint requires of any loss it differentiates."""
+    """Rotation, translation and scale invariance: the decode is defined up to a
+    similarity."""
     rng = np.random.default_rng(1)
     A = rng.standard_normal((30, 3))
     X = A + 0.2 * rng.standard_normal((30, 3))
     Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
     if np.linalg.det(Q) < 0:
         Q[:, 0] *= -1
-    base = enc.procrustes(A, X)[0]
-    moved = enc.procrustes(A, 3.7 * X @ Q + np.array([1.0, -2.0, 0.5]))[0]
+    base = enc.procrustes(A, X)
+    moved = enc.procrustes(A, 3.7 * X @ Q + np.array([1.0, -2.0, 0.5]))
     assert moved == pytest.approx(base, rel=1e-12)
-    assert enc.procrustes(A, A)[0] < 1e-20
-
-
-# --------------------------------------------------------------------------- #
-# End to end                                                                  #
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
-# Preconditioning                                                             #
-# --------------------------------------------------------------------------- #
-
-def test_band_precond_shape_and_monotonicity():
-    d = enc.band_precond(6, alpha=0.75)
-    assert d.shape == (enc.n_coeffs(6),)
-    assert (d > 0).all() and d.max() == pytest.approx(1.0)
-    # constant within a band, increasing across bands
-    b = enc.band_index(6)
-    per_band = [d[b == l][0] for l in range(7)]
-    assert all(np.allclose(d[b == l], per_band[l]) for l in range(7))
-    assert all(x < y for x, y in zip(per_band[1:], per_band[2:]))
-    assert np.allclose(enc.band_precond(6, alpha=0.0), 1.0)
+    assert enc.procrustes(A, A) < 1e-20
 
 
 def test_direct_encoder_is_exact_on_spheres():

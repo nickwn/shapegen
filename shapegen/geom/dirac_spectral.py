@@ -2,8 +2,8 @@
 
 Solves for the spinor ``lambda`` of the spin transformation of the round
 sphere with curvature potential ``rho``. It is the only potential the quad
-pipeline uses and the spinor that :mod:`shapegen.geom.spectral_adjoint` and
-:func:`shapegen.quad.lift.lift_spectral` integrate into a surface.
+pipeline uses and the spinor that :func:`shapegen.quad.lift.lift_spectral`
+integrates into a surface.
 
 **The system.** Splitting ``lambda = a + b j`` gives the Kamberov-Pedit-Pinkall
 / Konopelchenko-Taimanov pair
@@ -119,7 +119,7 @@ class SpinorTransform:
     Wigner-d table in ``theta``, then a trig sum in ``phi``.
 
     Both the ``rho`` coupling (:func:`coupling_matrix`) and the continuum
-    lift (:class:`shapegen.geom.spectral_adjoint.SpectralLift`) use it, each on
+    lift (:class:`shapegen.quad.lift.SpectralLift`) use it, each on
     its own grid. Coefficients are in :func:`~shapegen.spectral.swsh.half_modes`
     order and ``synth`` agrees with
     :func:`~shapegen.spectral.swsh.half_eval_basis`. Setup is a few MB, where
@@ -313,17 +313,8 @@ class DiracSpectral:
     L: int
     c: float
     niter: int = 0          # inverse-iteration steps (0 for method="svd")
-    # the factorised operator and the kernel pair (2n, 2): what the encoder's
-    # backward pass reuses (method="lu" only)
+    # the factorised operator (method="lu" only): reused by signed_gamma / close_code
     op: "DiracOperator | None" = field(default=None, repr=False, compare=False)
-    pair: np.ndarray | None = field(default=None, repr=False, compare=False)
-
-    @property
-    def gamma_squared(self) -> float:
-        """Comparable to :mod:`shapegen.geom.dirac`'s Gram residual
-        ``gamma_mesh``."""
-        return self.gamma ** 2
-
 
 def solve_spinor(rho_hat: np.ndarray, L: int, c: float = 1.0,
                  Ls: float | None = None, v0=None, method: str = "lu",
@@ -345,7 +336,7 @@ def solve_spinor(rho_hat: np.ndarray, L: int, c: float = 1.0,
     ``||G*G V - V gamma^2||`` is below ``tol`` (~3 steps cold). 0.4 s at L=32
     against 33 s for the dense SVD, ``gamma`` equal to the SVD's to ~1e-14
     relative. Exactly singular ``G`` (round sphere) is fine. The result keeps
-    the operator and the pair (``op``, ``pair``) for the encoder's adjoint.
+    the factorised operator (``op``).
 
     ``with_gap``: ``gap`` is ``nan`` unless asked for. The next singular
     value converges after the pair (stopping on the pair alone once reported
@@ -378,8 +369,7 @@ def solve_spinor(rho_hat: np.ndarray, L: int, c: float = 1.0,
     return DiracSpectral(psi1=v[:n], psi2=v[n:], gamma=float(sv[0]),
                          gap=(float(sv[mult]) if mult < len(sv) else float("inf"))
                          if with_gap else float("nan"),
-                         multiplicity=mult, Ls=Ls, L=L, c=c, niter=it,
-                         op=op, pair=X[:, :2])
+                         multiplicity=mult, Ls=Ls, L=L, c=c, niter=it, op=op)
 
 
 def signed_gamma(res: DiracSpectral) -> float:
@@ -418,8 +408,7 @@ def lu_kernel_pair(op: DiracOperator, v0=None, with_gap: bool = False,
                    tol: float = 1e-11, maxiter: int = 50):
     """The inverse iteration behind :func:`solve_spinor`'s ``method="lu"``:
     ``(sv, X, niter)`` with ``sv`` ascending Ritz singular values and
-    ``X[:, :2]`` the kernel pair. ``op`` carries the factorisation, which
-    :mod:`shapegen.geom.spectral_adjoint` reuses for the backward pass."""
+    ``X[:, :2]`` the kernel pair."""
     n2 = 2 * op.n
     k = 6 if with_gap else 4
     X = np.random.default_rng(0).standard_normal((n2, k)) + 0j

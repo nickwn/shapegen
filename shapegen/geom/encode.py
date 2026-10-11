@@ -1,25 +1,13 @@
-"""Spherical-harmonic primitives shared by the encoders: the real SH basis, a
-mass-weighted projection, the Procrustes shape loss, and the per-band
-preconditioner.
-
-Two traps the optimiser in :func:`shapegen.geom.spectral_adjoint.encode_spectral`
-inherits, both silent:
-
-* **Tolerances.** The Procrustes ``J`` is a normalised squared error (~3e-5 at
-  a 0.6% shape error), so L-BFGS-B's default ``pgtol`` of 1e-5 is met at the
-  start and it returns ``nit=0`` having taken no step. Pin ``ftol``/``gtol``
-  far below the problem's scale and check ``niter``.
-* **Warm starts across bandwidths** are not worth it: with :func:`band_precond`
-  a cold start per band reaches the same optimum at the same total cost.
-"""
+"""Spherical-harmonic primitives shared by the encoders: the real SH basis (and
+its evaluation without building it), a mass-weighted projection, and the
+Procrustes shape error."""
 
 from __future__ import annotations
 
 import numpy as np
 
 
-__all__ = ["real_sh_basis", "n_coeffs", "band_index", "procrustes",
-           "band_precond", "sh_project"]
+__all__ = ["real_sh_basis", "eval_real_sh", "n_coeffs", "band_index", "procrustes", "sh_project"]
 
 
 def n_coeffs(L: int) -> int:
@@ -70,6 +58,52 @@ def real_sh_basis(V: np.ndarray, L: int) -> np.ndarray:
     return out.T
 
 
+def eval_real_sh(V: np.ndarray, coeffs: np.ndarray, L: int, chunk: int = 32768) -> np.ndarray:
+    """``real_sh_basis(V, L) @ coeffs`` without building the basis: per order ``m``
+    the Legendre ladder ``d^ℓ_{m0}(θ)`` (seeded ``∝ sin^m θ``, then
+    ``d^{ℓ+1} = [(2ℓ+1) cos θ d^ℓ − √(ℓ²−m²) d^{ℓ−1}] / √((ℓ+1)²−m²)``),
+    contracted with that order's coefficients, times ``cos/sin mφ`` (by complex
+    rotation). ``coeffs`` is ``((L+1)², k)`` or ``((L+1)²,)``. At L=79 on 32k
+    points ~0.2 s against 0.7 s through the basis."""
+    c = np.asarray(coeffs, float)
+    vec = c.ndim == 1
+    c = c[:, None] if vec else c
+    r = np.linalg.norm(V, axis=1)
+    out = np.empty((len(V), c.shape[1]))
+    li = np.arange(L + 1)
+    Nl = np.sqrt((2 * li + 1) / (4 * np.pi))
+    for s0 in range(0, len(V), chunk):
+        P = V[s0:s0 + chunk]
+        x = np.clip(P[:, 2] / r[s0:s0 + chunk], -1.0, 1.0)
+        sn = np.sqrt(np.maximum(1.0 - x * x, 0.0))
+        rho = np.hypot(P[:, 0], P[:, 1])
+        e1 = np.where(rho > 0, (P[:, 0] + 1j * P[:, 1]) / np.where(rho > 0, rho, 1.0), 1.0)   # e^{iφ}
+        em = np.ones(len(P), complex)
+        acc = np.zeros((len(P), c.shape[1]))
+        seed = np.ones(len(P))
+        d = np.empty((L + 1, len(P)))
+        for m in range(L + 1):
+            if m > 0:
+                seed = seed * (-sn) * np.sqrt((2 * m - 1) / (2 * m))
+                em = em * e1
+            d[0] = seed
+            if m < L:
+                d[1] = np.sqrt(2 * m + 1.0) * x * seed
+            for i in range(1, L - m):
+                l = m + i
+                d[i + 1] = ((2 * l + 1) / np.sqrt((l + 1) ** 2 - m * m)) * x * d[i] \
+                    - (np.sqrt(l * l - m * m) / np.sqrt((l + 1) ** 2 - m * m)) * d[i - 1]
+            ls = li[m:]
+            dm = d[:L + 1 - m].T
+            if m == 0:
+                acc += dm @ (Nl[:, None] * c[ls * ls + ls])
+            else:
+                A = (np.sqrt(2.0) * (-1) ** m * Nl[ls])[:, None]
+                acc += em.real[:, None] * (dm @ (A * c[ls * ls + ls + m])) + em.imag[:, None] * (dm @ (A * c[ls * ls + ls - m]))
+        out[s0:s0 + chunk] = acc
+    return out[:, 0] if vec else out
+
+
 def sh_project(rho: np.ndarray, Y: np.ndarray, mass: np.ndarray | None = None):
     """SH coefficients of a per-vertex field on the sphere.
 
@@ -95,54 +129,11 @@ def sh_project(rho: np.ndarray, Y: np.ndarray, mass: np.ndarray | None = None):
     return np.linalg.solve(G + 1e-12 * np.eye(G.shape[0]), Yw.T @ rho)
 
 
-# --------------------------------------------------------------------------- #
-# The objective                                                               #
-# --------------------------------------------------------------------------- #
-
-def band_precond(L: int, alpha: float = 0.75) -> np.ndarray:
-    """Per-coefficient step scaling by SH degree: ``[ℓ(ℓ+1)]^alpha``, normalised.
-
-    The optimiser is reparameterised as ``ĉ = d ⊙ u`` and run on ``u``. This is a
-    pure change of variables — the optimum is identical — but it fixes a badly
-    scaled Hessian, and that is worth roughly an order of magnitude of work.
-
-    A unit change in a high-ℓ coefficient of ρ moves the surface far less than a
-    low-ℓ one (linearised, ``σ̂_{ℓm} = 2R²/[ℓ(ℓ+1)] · ρ̇_{ℓm}``), so J's curvature
-    falls off with degree and L-BFGS crawls along the flat high-ℓ directions.
-    Probing the diagonal curvature per band gives ``∂²J/∂c² ~ [ℓ(ℓ+1)]^{-1.5}``
-    — *not* the ``^-2`` the linearisation alone suggests — and equalising it
-    wants ``d ∝ [ℓ(ℓ+1)]^{0.75}``, hence the default.
-
-    Measured (bottle, L=40, cold start): alpha=0.75 reaches alpha=0's final
-    error in 8.5x fewer evaluations. The optimum is flat over 0.5-0.75 and
-    degrades above ~0.875. (A probed per-band Jacobi preconditioner lost to
-    no preconditioning at L=16.)
-    """
-    b = band_index(L)
-    # Clamp l(l+1) at 2 so degrees 0 and 1 share degree 1's scale instead of
-    # producing 0 (which would make d = 0 there and freeze those coefficients
-    # entirely). They carry the overall size and centring of rho, so freezing
-    # them would silently constrain the fit.
-    d = np.maximum(b * (b + 1.0), 2.0) ** alpha
-    # Normalise so the largest scale is 1. Only *ratios* between coefficients
-    # matter for conditioning; fixing the top end keeps L-BFGS's internal step
-    # bounds and the ftol/gtol thresholds meaning the same thing across L and
-    # across alpha, so runs stay comparable.
-    return d / d.max()
-
-
-def procrustes(target: np.ndarray, X: np.ndarray):
-    """Squared relative Procrustes error of ``X`` against ``target``, and
-    ``dJ/dX``. Returns ``(J, grad)``; the reported error is ``√J``.
-
-    Optimal rotation, translation and scale are solved for and then **held
-    fixed** while differentiating — the envelope theorem, since they are
-    themselves minimisers. So the SVD never appears in the gradient.
-
-    Invariant under ``X → sQX + t``, which is what makes ``J`` a legal objective
-    for the adjoint: the decode determines the immersion only up to a similarity,
-    and a loss that could see the difference would be differentiating a gauge.
-    """
+def procrustes(target: np.ndarray, X: np.ndarray) -> float:
+    """Squared relative Procrustes error ``J`` of ``X`` against ``target``, after the
+    optimal rotation, translation and scale; the reported error is ``√J``.
+    Invariant under ``X → sQX + t``: the decode determines the immersion only up
+    to a similarity."""
     # Translation is removed by centring both clouds; this is the optimal
     # translation, not an approximation of it.
     A = target - target.mean(0)
@@ -169,21 +160,7 @@ def procrustes(target: np.ndarray, X: np.ndarray):
     denom = float((BR * BR).sum())
     s = float((A * BR).sum() / max(denom, 1e-300))
 
-    # Normalise by ||A||^2 so J is scale-free and comparable across meshes; it
-    # also puts J on a fixed numeric scale (~1e-5 at a 0.6% error), which is
-    # why the encoders override L-BFGS's default tolerances.
-    c = float((A * A).sum())
+    # Normalised by ||A||^2 so J is scale-free and comparable across meshes.
     E = A - s * BR
-    J = float((E * E).sum() / c)
-
-    # Gradient with (s, R, translation) FROZEN at their optimal values. Legal by
-    # the envelope theorem: they are minimisers, so dJ/ds = dJ/dR = 0 and their
-    # variation contributes nothing to the total derivative. This is what keeps
-    # the SVD out of the gradient -- differentiating an SVD is both ugly and
-    # ill-defined when singular values collide.
-    dB = (-2.0 * s / c) * (E @ R.T)
-    # Adjoint of the centring B = X - mean(X). Mean removal is a symmetric
-    # projection, so it is its own adjoint; without this the caller would get a
-    # gradient with a spurious constant mode.
-    return J, dB - dB.mean(0)
+    return float((E * E).sum() / (A * A).sum())
 

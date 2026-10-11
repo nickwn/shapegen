@@ -20,8 +20,8 @@ from pathlib import Path
 
 import numpy as np
 
-__all__ = ["read_ply", "read_obj", "read_mesh", "fill_holes", "apply_caps",
-           "boundary_loops", "load_registered", "check_registered"]
+__all__ = ["read_ply", "read_obj", "fill_holes", "apply_caps", "boundary_loops",
+           "check_registered"]
 
 _NP = {"float": "f4", "float32": "f4", "double": "f8", "float64": "f8",
        "uchar": "u1", "uint8": "u1", "char": "i1", "int8": "i1",
@@ -139,26 +139,6 @@ def check_registered(meshes):
             "genus": g}
 
 
-def load_registered(root, pattern="**/*.ply", limit=None, stride=1):
-    """Load a directory tree of registered meshes into ``[Mesh]``.
-
-    ``stride`` subsamples: COMA-style data is 60 fps video, so consecutive frames
-    are near-duplicates and encoding all of them mostly buys redundancy.
-    """
-    from ..geom.mesh import Mesh  # noqa: PLC0415
-    paths = sorted(Path(root).glob(pattern))[::stride]
-    if not paths:
-        raise FileNotFoundError(f"no files matching {pattern!r} under {root}")
-    if limit is not None:
-        paths = paths[:limit]
-    meshes = []
-    for p in paths:
-        V, F = read_ply(p)
-        meshes.append(Mesh(V, F))
-    check_registered(meshes)
-    return meshes
-
-
 def read_obj(path):
     """``(V, F)`` from a Wavefront OBJ. Polygons are fan-triangulated.
 
@@ -177,16 +157,6 @@ def read_obj(path):
                 idx = [int(q.split("/")[0]) - 1 for q in t[1:]]
                 F += [[idx[0], idx[i], idx[i + 1]] for i in range(1, len(idx) - 1)]
     return np.array(V, dtype=float), np.array(F, dtype=np.int64)
-
-
-def read_mesh(path):
-    """Dispatch on suffix."""
-    p = Path(path)
-    if p.suffix.lower() == ".ply":
-        return read_ply(p)
-    if p.suffix.lower() == ".obj":
-        return read_obj(p)
-    raise ValueError(f"{p.name}: expected .ply or .obj")
 
 
 def boundary_loops(F):

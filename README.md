@@ -72,21 +72,18 @@ eyelids.
 on the sphere for a quaternion field, then integrate it into 3D positions.
 Everything happens in the spherical-harmonic domain, so the output is a
 continuous surface you can evaluate at any point on the sphere, at any
-resolution. It is deterministic, has no parameters, and is differentiable:
-exact gradients are implemented (NumPy, not autograd), and that is what the
-default encoder optimises through.
+resolution. It is deterministic and has no parameters.
 
-**Encoder** `mesh → z`. Map the mesh to the sphere (from its graph-Laplacian
-eigenvectors, < 1 s), then find z. There are several encoders, which are
-amortisation / accuracy trade-offs over the same inverse problem:
+**Encoder** `mesh → z`. Map the mesh to the sphere, then find z. The default
+(`polyhedral`) reads the mesh as a polyhedron and computes its own conformal
+sphere map; the others map it from its graph-Laplacian eigenvectors (< 1 s). They
+are accuracy / speed trade-offs over the same inverse problem:
 
 | method | what it is | rel. error, heads, L=32 | time |
 |---|---|---|---|
-| `spectral` (default) | L-BFGS on reconstruction loss through the decoder | 0.0050 | ~30 s |
-| `dirac` | closed form: two linear least-squares solves | 0.0069 | ~1.6 s |
-| `quotient` | cheaper closed-form approximation of `dirac` | ≈1.1× `dirac` | ~0.1 s |
-| `direct` | measure ρ from mesh curvature and project; no fitting | ~5× worse | < 1 s |
-| `polyhedral` | exact solve for low-poly / CAD inputs | — | 0.1–30 s |
+| `quotient` | the Dirac equation read pointwise off the target's spinor, corrected onto the decoder's | ~0.0077 | ~0.1 s (+0.65 s closing and scoring) |
+| `direct` | measure ρ from mesh curvature and project; no fitting | ~0.024 (3× worse) | < 1 s |
+| `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan (not comparable with the rows above) | 0.1–10 s; ~4 s per head |
 
 Error is Procrustes-aligned (rotation/translation/scale removed), relative to
 shape size.

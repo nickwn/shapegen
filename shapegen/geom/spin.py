@@ -120,7 +120,7 @@ def face_spinors(S, T, F):
     an icosphere resample) is a branch point instead, and a loop around it
     flips the sign. A breadth-first tree then ran a seam across the surface
     (FaceScape head 10 of ``trainset_001_100``: 72 dual edges at cos = −1, and
-    ``method="dirac"`` decoded at 0.48 against ~0.007). The best-agreeing tree
+    the since-removed ``dirac`` encoder decoded at 0.48 against ~0.007). The best-agreeing tree
     only crosses the few bad edges next to the fold (2, none below cos −0.5),
     and the decode error drops to 0.0081."""
     return align_signs(face_lambdas(S, T, F), F)

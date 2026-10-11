@@ -3,7 +3,7 @@
 :func:`lift_spectral` is the lift (and what :func:`shapegen.codec.decode`
 calls): the spectral spinor gives the surface's differential
 ``df̃ = λ̄ df₀ λ``, the least squares ``∫|∇f − ω|²`` is solved in spherical
-harmonics (:class:`shapegen.geom.spectral_adjoint.SpectralLift`), and the
+harmonics (:class:`SpectralLift`), and the
 surface is read off at the requested directions. No mesh and no edge graph.
 
 :func:`frame_quaternion` / :func:`spinor_quaternion` are the
@@ -16,7 +16,9 @@ from functools import lru_cache
 
 import numpy as np
 
-__all__ = [ "frame_quaternion", "spinor_quaternion", "lift_spectral"]
+from ..spectral.quaternion import from_vec3, qconj, qmul, to_vec3
+
+__all__ = ["frame_quaternion", "spinor_quaternion", "SpectralLift", "lift_spectral"]
 
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +74,6 @@ def spinor_quaternion(res, dirs: np.ndarray, chunk: int = 8192) -> np.ndarray:
     mesh at once would be gigabytes for no gain.
     """
     from ..spectral import swsh as sw
-    from ..spectral.quaternion import qmul
 
     d = np.asarray(dirs, dtype=float)
     theta = np.arccos(np.clip(d[:, 2], -1.0, 1.0))
@@ -87,9 +88,106 @@ def spinor_quaternion(res, dirs: np.ndarray, chunk: int = 8192) -> np.ndarray:
     return out
 
 
+class SpectralLift:
+    """The lift ``v → f̂`` as a continuum least squares, solved spectrally.
+
+    Minimises ``∫_S² |∇f − ω|² dA`` with ``ω = Im(λ̄ df₀ λ)``, the ℝ³-valued 1-form the spin
+    transform gives. Round-sphere harmonics have ``∫∇Y_k·∇Y_k' = ℓ(ℓ+1)δ``, so the
+    normal equations are diagonal:
+
+        f̂_k = (1/ℓ(ℓ+1)) ∫ [∂θY_k·ω(e_θ) + (1/sinθ)∂φY_k·ω(e_φ)] dA,   ℓ ≥ 1
+
+    one weighted sum per coefficient on a Gauss-Legendre grid, with separable
+    transforms (per-m Wigner-d in θ, trig in φ). ``f̂`` is real SH in
+    :func:`~shapegen.geom.encode.real_sh_basis`'s layout, ``(K, 3)``.
+
+    **Exact.** ω is quadratic in λ (band ``Ls``), so ``f`` has band ``2·Ls``
+    exactly and the default ``Lf = 2·Ls`` (79 at L=32) keeps all of it; the
+    integrand has degree ``Lf + 2·Ls``, which the grid integrates exactly.
+    Trap: a grid sized for λ alone aliases (~1% error). Setup is a few MB.
+
+    ``forward(v) -> (f̂, cache)``.
+    """
+
+    def __init__(self, Ls: float, Lf: int | None = None):
+        from math import sqrt
+
+        from ..geom.dirac_spectral import SpinorTransform
+        from ..spectral import swsh as sw
+
+        Lf = int(round(2 * Ls)) if Lf is None else int(Lf)
+        self.Ls, self.Lf = Ls, Lf
+        B = int(round(Lf + 2 * Ls))                   # degree integrated exactly
+        nth, nph = int(np.ceil((B + 1) / 2)), B + 1
+        x, w = np.polynomial.legendre.leggauss(nth)
+        th = np.arccos(x)
+        ph = 2 * np.pi * np.arange(nph) / nph
+        self.th, self.ph, self.nth, self.nph = th, ph, nth, nph
+        self.Wj = w * (2 * np.pi / nph)
+        TH, PH = np.meshgrid(th, ph, indexing="ij")
+        self.R = frame_quaternion(TH, PH)
+        st, ct, sp_, cp = np.sin(TH), np.cos(TH), np.sin(PH), np.cos(PH)
+        self.eth = from_vec3(np.stack([ct * cp, ct * sp_, -st], -1))
+        self.eph = from_vec3(np.stack([-sp_, cp, np.zeros_like(sp_)], -1))
+        self.tf = SpinorTransform(Ls, th, nph)
+        self.nmodes = self.tf.n
+        # real SH of band Lf, separably: Y_k = Θ_k(θ) · trig_col(k)(φ)
+        K = (Lf + 1) ** 2
+        ncol = 2 * Lf + 1
+        Tph = np.zeros((nph, ncol))
+        Tph[:, 0] = 1.0
+        for m in range(1, Lf + 1):
+            Tph[:, 2 * m - 1] = np.cos(m * ph)
+            Tph[:, 2 * m] = np.sin(m * ph)
+        Th, dTh = np.zeros((nth, K)), np.zeros((nth, K))
+        col, pcol = np.zeros(K, dtype=np.intp), np.zeros(K, dtype=np.intp)
+        sig, ell = np.zeros(K), np.zeros(K)
+        for m in range(0, Lf + 1):
+            ls, d0 = sw.wigner_d_ladder(Lf, m, 0, th)
+            _, dp = sw.wigner_d_ladder(Lf, m, 1, th)
+            _, dm = sw.wigner_d_ladder(Lf, m, -1, th)
+            for i, l in enumerate(ls):
+                l = int(round(l))
+                N = sqrt((2 * l + 1) / (4 * np.pi))
+                j = l - max(m, 1)
+                # ∂θ(N d^l_{m0}) = ½√(l(l+1)) N (d^l_{m,−1} − d^l_{m,1}); pinned by FD
+                dth = 0.5 * sqrt(l * (l + 1)) * N * (dm[j] - dp[j]) if l >= 1 else 0.0 * th
+                for mm in ((0,) if m == 0 else (m, -m)):
+                    k = l * l + l + mm
+                    c = 1.0 if m == 0 else sqrt(2) * (-1) ** m
+                    Th[:, k], dTh[:, k], ell[k] = c * N * d0[i], c * dth, l
+                    if m == 0:
+                        col[k] = pcol[k] = 0
+                    elif mm > 0:                  # cos(mφ): ∂φ -> −m sin(mφ)
+                        col[k], pcol[k], sig[k] = 2 * m - 1, 2 * m, -m
+                    else:                         # sin(mφ): ∂φ -> +m cos(mφ)
+                        col[k], pcol[k], sig[k] = 2 * m, 2 * m - 1, m
+        self.K, self.Tph, self.Th = K, Tph, Th
+        self.col, self.pcol = col, pcol
+        self.inv_ll = np.where(ell > 0, 1.0 / np.maximum(ell * (ell + 1), 1), 0.0)
+        self.A_th = self.Wj[:, None] * dTh
+        self.A_ph = self.Wj[:, None] * (Th / np.sin(th)[:, None]) * sig[None, :]
+
+    def spinor(self, v):
+        """The spinor on the grid: the dictionary ``λ = R·(ψ1 + conj(ψ2) j)``."""
+        k = self.nmodes
+        a, b = self.tf.synth(+0.5, v[:k]), self.tf.synth(-0.5, v[k:])
+        return qmul(self.R, np.stack([a.real, a.imag, b.real, -b.imag], -1))
+
+    def forward(self, v):
+        lam = self.spinor(v)
+        lb = qconj(lam)
+        wth = to_vec3(qmul(qmul(lb, self.eth), lam))
+        wph = to_vec3(qmul(qmul(lb, self.eph), lam))
+        Fth = np.einsum("jpc,pt->jtc", wth, self.Tph)
+        Fph = np.einsum("jpc,pt->jtc", wph, self.Tph)
+        rhs = (np.einsum("jk,jkc->kc", self.A_th, Fth[:, self.col])
+               + np.einsum("jk,jkc->kc", self.A_ph, Fph[:, self.pcol]))
+        return rhs * self.inv_ll[:, None], {"lam": lam}
+
+
 @lru_cache(maxsize=2)
 def _spectral_lift(Ls: float):
-    from ..geom.spectral_adjoint import SpectralLift
     return SpectralLift(Ls)
 
 
@@ -99,7 +197,7 @@ def lift_spectral(dirs: np.ndarray, rho_hat: np.ndarray, L: int, res=None,
     encoded by ``rho_hat`` (real-SH ρ coefficients at bandwidth ``L``).
 
     Solves ``∫_S² |∇f − ω|² dA`` exactly in spherical harmonics
-    (:class:`~shapegen.geom.spectral_adjoint.SpectralLift`), ``ω`` the
+    (:class:`SpectralLift`), ``ω`` the
     spinor's ``df̃``, then evaluates ``f`` at ``dirs`` in chunks of ``chunk``.
     ``f`` is band-limited at ``2·Ls`` (79 at L=32), so the result does not
     depend on how ``dirs`` are sampled or connected. ~1.8 s at L=32 for a

@@ -232,7 +232,9 @@ def test_close_potential_zeroes_gamma_without_moving_the_surface():
     """``sigma3 G`` is Hermitian and ``l = 0`` of ``rho`` shifts it by a
     constant, so :func:`~shapegen.geom.dirac_spectral.close_potential` makes
     ``gamma`` vanish while the spinor (and so the surface) stays put."""
-    from shapegen.geom.spectral_adjoint import SpectralLift, coef_procrustes
+    from shapegen.codec import shape_error
+    from shapegen.geom.encode import eval_real_sh
+    from shapegen.quad.lift import SpectralLift
 
     L = 8
     Ls = ds.spinor_band(L, ds.potential_band_extra(L))
@@ -249,7 +251,8 @@ def test_close_potential_zeroes_gamma_without_moving_the_surface():
     lift = SpectralLift(Ls)
     f1 = lift.forward(np.r_[res.psi1, res.psi2])[0]
     f2 = lift.forward(np.r_[res2.psi1, res2.psi2])[0]
-    assert coef_procrustes(f1, f2)[0] < 1e-18
+    P = np.random.default_rng(0).normal(size=(500, 3))
+    assert shape_error(eval_real_sh(P, f1, lift.Lf), eval_real_sh(P, f2, lift.Lf)) < 1e-9
 
 
 def test_separable_synthesis_is_the_basis():

@@ -2,9 +2,9 @@
 
 The numerical kernels in ``operators.py`` / ``curvature.py`` / ``dirac.py`` take
 bare ``(V, F)`` arrays (``V`` float64 ``(n,3)``, ``F`` int ``(m,3)``). ``Mesh`` is
-a thin convenience wrapper exposing the trimesh-like attributes the data pipeline
-(``data/shapenet.py``) reads — ``vertices``, ``faces``, ``area``, ``center_mass``,
-``euler_number``, ``genus`` — without taking a hard dependency on ``trimesh``.
+a thin convenience wrapper exposing trimesh-like attributes — ``vertices``,
+``faces``, ``euler_number``, ``genus`` — without taking a hard dependency on
+``trimesh``.
 
 Generators (``icosphere``, ``ellipsoid``) build meshes whose curvature has a
 closed form, so the curvature kernels can be verified against exact values.
@@ -47,18 +47,6 @@ class Mesh:
         self.faces = np.asarray(self.faces, dtype=np.int64)
 
     # --- trimesh-like attributes used by the data pipeline -----------------
-    @property
-    def area(self) -> float:
-        return float(triangle_areas(self.vertices, self.faces).sum())
-
-    @property
-    def center_mass(self) -> np.ndarray:
-        """Area-weighted surface centroid (matches trimesh ``center_mass`` for
-        a closed, well-tessellated surface closely enough for normalization)."""
-        fa = triangle_areas(self.vertices, self.faces)
-        c = self.vertices[self.faces].mean(axis=1)
-        return (fa[:, None] * c).sum(0) / max(fa.sum(), 1e-30)
-
     @property
     def euler_number(self) -> int:
         V = len(self.vertices)

@@ -31,11 +31,6 @@ def _sphere(subdiv=3):
     return V, m.faces
 
 
-def _edges(faces):
-    e = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
-    return np.unique(np.sort(e, axis=1), axis=0)
-
-
 def _scatter(q):
     """Median distance from the mean on sign-aligned unit quaternions.
     A random field scores ~0.91; a constant field scores 0."""
