@@ -14,9 +14,8 @@ Two implementations of the same interface:
 ``RhoBasis``
     ρ̂, the spin-transform code, via :mod:`shapegen.codec`. Needs no
     correspondence, works on unregistered genus-0 shapes, always decodes to *some*
-    surface, and hands you γ as a free validity score. The ``direct`` codes
-    training uses are less accurate than PCA on registered faces -- that is the
-    trade -- but it is the path that generalises off a registered dataset.
+    surface, and hands you γ as a free validity score. It is the path that
+    generalises off a registered dataset.
 
 Both expose ``fit`` / ``encode`` / ``decode`` on **whitened** codes. Whitening is
 not cosmetic: the flow-matching loss is an unweighted MSE in code space, so
@@ -91,18 +90,20 @@ class RhoBasis:
     mesh to parameterise, so it must be shared. Decoding is the mesh-free
     spectral decoder at the sphere's points.
 
-    On registered data against a shared template, ``direct`` codes are exactly
-    rotation-invariant (measured 3.7e-15 under a random rotation), since ``H``
-    and the edge-length conformal factor are -- so no rotation gauge is needed.
+    Codes are ``quotient`` encodes against that sphere
+    (:func:`shapegen.geom.dirac_quotient.encode_quotient`, without the closing
+    solve: ~80 ms per mesh, and ``ℓ = 0`` does not change the decode), the same
+    encoder ``codec.encode(..., method="quotient")`` scores, so training and
+    evaluation codes agree.
 
-    ``method="direct"`` (default) is what training uses: milliseconds per mesh,
-    a measurement comparable across meshes, and its fields are reusable across
-    ``L``. ``method="quotient"`` (or ``"polyhedral"``) fits each mesh against the
-    shared sphere -- several times more accurate, about a second per mesh.
+    **Codes see pose.** Against a fixed sphere a random rotation of a head moves
+    its code by ~7% at L=32 (5-7% on three FaceScape heads, against ~31%
+    between subjects), so Procrustes-align the set first
+    (:func:`shapegen.data.faces.build_dataset` does by default).
     """
 
-    def __init__(self, sphere, faces, L, method="direct", mean=None, scale=None):
-        self.sphere, self.faces, self.L, self.method = sphere, faces, L, method
+    def __init__(self, sphere, faces, L, mean=None, scale=None):
+        self.sphere, self.faces, self.L = sphere, faces, L
         self.mean, self.scale = mean, scale
 
     @property
@@ -110,50 +111,18 @@ class RhoBasis:
         from ..codec import n_coeffs  # noqa: PLC0415
         return n_coeffs(self.L)
 
-    def rho_fields(self, X) -> np.ndarray:
-        """``(N, n)`` per-vertex ρ for every shape, before any band-limiting.
-
-        **ρ_direct does not depend on L** -- only the projection does -- and the
-        per-mesh ``u_edge_lsq`` (an LSQR over every edge) is the expensive part,
-        so compute the fields once and pass them as ``fields=`` to :meth:`fit` /
-        :meth:`encode`, or cache them with ``scripts/encode_faces.py``.
-
-        Only for ``method="direct"``: the other methods fit a code at a specific
-        bandwidth, which cannot be reused across L.
-        """
-        from ..geom.mesh import Mesh  # noqa: PLC0415
-        from ..geom.spin import mesh_to_rho_direct  # noqa: PLC0415
-        if self.method != "direct":
-            raise ValueError(
-                f"rho fields are bandwidth-independent only for method='direct'; "
-                f"this basis uses {self.method!r}, whose rho is fitted at a "
-                f"specific L and cannot be reused across bandwidths")
-        return np.stack([mesh_to_rho_direct(Mesh(x, self.faces), self.sphere)
-                         for x in X])
-
-    def _project(self, fields) -> np.ndarray:
-        """``(N, n)`` ρ fields → ``(N, K)`` raw SH coefficients."""
-        from ..geom import encode as _enc  # noqa: PLC0415
-        from ..geom.operators import vertex_areas  # noqa: PLC0415
-        Y = _enc.real_sh_basis(self.sphere, self.L)
-        mass = vertex_areas(self.sphere, self.faces)
-        return np.stack([_enc.sh_project(r, Y, mass=mass) for r in fields])
-
-    def _raw(self, X, fields=None):
-        if fields is not None:
-            return self._project(fields)
-        if self.method == "direct":
-            return self._project(self.rho_fields(X))
-        from .. import codec  # noqa: PLC0415
-        from ..geom.mesh import Mesh  # noqa: PLC0415
-        return np.stack([
-            codec.encode(Mesh(x, self.faces), self.L, sphere=self.sphere,
-                         method=self.method).coeffs for x in X])
+    def _raw(self, X) -> np.ndarray:
+        """``(N, n, 3)`` positions on the shared connectivity → ``(N, K)`` raw ρ̂."""
+        from ..codec import _spectral_context  # noqa: PLC0415
+        from ..geom.dirac_quotient import encode_quotient  # noqa: PLC0415
+        lift, Ls = _spectral_context(self.L)
+        return np.stack([encode_quotient(x, self.sphere, self.faces, self.L, lift=lift,
+                                         Ls=Ls, close=False)["coeffs"] for x in X])
 
     @classmethod
-    def fit(cls, X, faces, L, sphere, method="direct", fields=None) -> "RhoBasis":
-        b = cls(sphere, faces, L, method)
-        C = b._raw(X, fields=fields)
+    def fit(cls, X, faces, L, sphere) -> "RhoBasis":
+        b = cls(sphere, faces, L)
+        C = b._raw(X)
         b.mean = C.mean(0)
         # Band-wise scale, not per-coefficient: the 2l+1 coefficients of a band
         # share a physical scale, so pooling them estimates it from 2l+1 times as
@@ -172,8 +141,8 @@ class RhoBasis:
         b.scale = sd
         return b
 
-    def encode(self, X: np.ndarray, fields=None) -> np.ndarray:
-        return (self._raw(X, fields=fields) - self.mean) / self.scale
+    def encode(self, X: np.ndarray) -> np.ndarray:
+        return (self._raw(X) - self.mean) / self.scale
 
     def decode(self, C: np.ndarray) -> np.ndarray:
         from .. import codec  # noqa: PLC0415

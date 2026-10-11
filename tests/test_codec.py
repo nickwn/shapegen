@@ -54,20 +54,6 @@ def test_base_sphere_is_gauge_fixed_and_round():
     assert np.linalg.norm((w[:, None] * S).sum(0)) < 1e-6
 
 
-def test_direct_and_quotient_are_both_available_and_differ():
-    """``direct`` is the cheap measurement training uses; ``quotient`` targets the
-    decoder and must beat it on a fixed mesh. Both decode to exactly the error
-    they report."""
-    mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
-    loc = codec.encode(mesh, L=8, method="direct")
-    fit = codec.encode(mesh, L=8, sphere=loc.sphere, method="quotient")
-    print(f"[direct] {loc.err:.5f}   [quotient] {fit.err:.5f}")
-    assert fit.err < loc.err
-    assert loc.coeffs.shape == fit.coeffs.shape
-    X = codec.decode(loc.coeffs, loc.sphere)
-    assert codec.shape_error(mesh.vertices, X) == pytest.approx(loc.err, rel=1e-9)
-
-
 def test_default_method_is_polyhedral_and_refuses_a_sphere():
     """The default computes its own sphere map; a given sphere needs a method that
     encodes against one, and the error says which."""
@@ -106,7 +92,7 @@ def test_encode_dataset_defaults_to_per_mesh_spheres():
     """With no ``sphere``, each mesh is encoded on its own conformal sphere, and
     each code decodes on it."""
     meshes = demo_bottle_meshes(n=2, subdiv=2, seed=0)
-    coeffs, results = codec.encode_dataset(meshes, L=4, method="direct")
+    coeffs, results = codec.encode_dataset(meshes, L=4, method="quotient")
     assert coeffs.shape == (2, codec.n_coeffs(4))
     assert not np.array_equal(results[0].sphere, results[1].sphere)
     assert np.isfinite(codec.decode(coeffs[0], results[0].sphere)).all()
@@ -121,12 +107,12 @@ def test_parallel_encode_matches_serial():
     """
     meshes = demo_bottle_meshes(n=4, subdiv=2, seed=0)
     T = codec.template_sphere(2)
-    a, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=1)
-    b, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="direct", n_jobs=2)
+    a, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="quotient", n_jobs=1)
+    b, _ = codec.encode_dataset(meshes, L=4, sphere=T, method="quotient", n_jobs=2)
     assert np.abs(a - b).max() < 1e-8
     # order preserved: each row must match ITS OWN mesh, not merely be present
     for i, m in enumerate(meshes):
-        solo = codec.encode(m, L=4, sphere=T, method="direct").coeffs
+        solo = codec.encode(m, L=4, sphere=T, method="quotient").coeffs
         assert np.abs(b[i] - solo).max() < 1e-8
 
 

@@ -28,7 +28,7 @@ band `L` (so `(L+1)²` numbers), of a scalar **ρ** on the unit sphere. ρ is th
 Public API (`shapegen/codec.py`):
 
 ```python
-res = codec.encode(mesh, L=32)                       # method="polyhedral" (default), "quotient", "direct"
+res = codec.encode(mesh, L=32)                       # method="polyhedral" (default) or "quotient"
 X   = codec.decode(res.coeffs, res.sphere)           # positions at res.sphere points
 err = codec.shape_error(mesh.vertices, X)            # == res.err (similarity-invariant)
 ```
@@ -202,11 +202,13 @@ reuses that solve for `f̂`, which is used for scoring. `close=False` skips the 
 
 | method | error (whole / face) | encode time |
 |---|---|---|
-| `direct` (mesh curvature `H·e^u − 1`, projected) | ~0.024 / 0.022 | 170 ms |
 | **`quotient`** | **~0.0077 / 0.0065** | **80 ms** encode (`close=False`); ~0.74 s in `codec.encode` |
 
-- Codes move 3% between ico5 and ico6 meshings (`direct`: 4.4%). The quotient is a
-  deterministic *measurement*.
+- Codes move 3% between ico5 and ico6 meshings. The quotient is a deterministic
+  *measurement*, but not rotation-invariant against a fixed sphere: a random rotation
+  moves a head's code ~7% (subjects differ by ~31%), so align poses first.
+- The removed `direct` encoder (mesh curvature `H·e^u − 1`, projected) scored
+  ~0.024 / 0.022; it was exactly rotation-invariant.
 - **Where it is weaker:** smooth shapes at low L. The removed `dirac` encoder (dense,
   resolvent-weighted least squares) matched it on heads but was 1.6–1.75× better on
   the demo bottle at L=8 and 1.2× at L=16–24.

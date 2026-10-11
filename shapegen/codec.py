@@ -8,7 +8,7 @@ One import for everything downstream::
 
 **ρ̂ is defined relative to a sphere parameterisation** of the shape, which
 :class:`EncodeResult` carries. The default method computes the polyhedron's own
-conformal sphere map; ``quotient`` and ``direct`` use a given sphere or the input's
+conformal sphere map; ``quotient`` uses a given sphere or the input's
 eigenbasis sphere (:func:`base_sphere`). The decoder is mesh-free: the
 spectral Dirac spinor, its surface solved in spherical harmonics
 (:func:`shapegen.quad.lift.lift_spectral`), read off at whatever sphere points
@@ -31,7 +31,7 @@ __all__ = ["EncodeResult", "template_sphere", "base_sphere", "encode",
 n_coeffs = _enc.n_coeffs
 band_index = _enc.band_index
 
-METHODS = ("quotient", "direct", "polyhedral")
+METHODS = ("quotient", "polyhedral")
 
 
 @dataclass
@@ -41,8 +41,7 @@ class EncodeResult:
     ``err`` is what :func:`decode` gives back (relative Procrustes). ``gamma`` is
     the Dirac residual of the code: ``γ = 0`` means some immersion has exactly
     this ρ. ``quotient`` and ``polyhedral`` codes are closed (``ℓ = 0`` set so
-    γ ~1e-15, see :func:`shapegen.geom.dirac_quotient.close_code`); ``direct``
-    codes are not measured.
+    γ ~1e-15, see :func:`shapegen.geom.dirac_quotient.close_code`).
     """
     coeffs: np.ndarray
     sphere: np.ndarray
@@ -81,10 +80,10 @@ REFINE_TO = 12000
 
 def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto") -> EncodeResult:
     """``mesh → ρ̂ ∈ ℝ^((L+1)²)``. The default ``"polyhedral"`` computes its own sphere
-    map (``sphere`` must be ``None``); ``"quotient"`` and ``"direct"`` encode
-    relative to ``sphere`` (default :func:`base_sphere`, per mesh).
+    map (``sphere`` must be ``None``); ``"quotient"`` encodes relative to
+    ``sphere`` (default :func:`base_sphere`, per mesh).
 
-    **Coarse meshes** (``quotient`` / ``direct`` only; ``refine="auto"``: under
+    **Coarse meshes** (``quotient`` only; ``refine="auto"``: under
     ``REFINE_BELOW`` faces, and no ``sphere`` given) are first remeshed isotropically to ~``REFINE_TO`` faces
     (:func:`shapegen.geom.mesh.remesh_isotropic`, the same surface), because the
     sphere map needs a fine, well-shaped mesh. The code then encodes the
@@ -99,8 +98,7 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
     * ``"quotient"``: the Dirac equation read pointwise off the
       target's spinor, then corrected onto the decoder's truncated equation by
       three matrix-free passes (:func:`shapegen.geom.dirac_quotient.encode_quotient`).
-      FaceScape heads at L=32: ~0.0077 / 0.0065 (whole / face), 3x better than
-      ``direct``. It encodes in ~80 ms; the closing solve and the scoring here add
+      FaceScape heads at L=32: ~0.0077 / 0.0065 (whole / face). It encodes in ~80 ms; the closing solve and the scoring here add
       ~0.65 s, so call ``encode_quotient(..., close=False)`` for bulk encoding.
       Weaker on smooth shapes at low L (see its module). Deterministic.
     * ``"polyhedral"`` (default): reads the mesh literally as a polyhedron (closed,
@@ -123,18 +121,13 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
       Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
       they are not interchangeable with the other methods'.
       ``res.meta["err_surface"]`` scores the decode over the whole surface.
-    * ``"direct"``: ``ρ = H·e^u − 1`` measured off the geometry and projected --
-      no optimisation, well under a second; what training uses (via
-      :class:`shapegen.models.basis.RhoBasis`), since it is a measurement of a
-      continuum quantity and comparable across meshes. ~3x less accurate than
-      ``quotient``.
     """
     if method not in METHODS:
         raise ValueError(f"method must be one of {METHODS}, got {method!r}")
     if method == "polyhedral":
         if sphere is not None:
             raise ValueError("method='polyhedral' (the default) computes its own sphere map; to encode "
-                             "against a given sphere pass method='quotient' or 'direct'")
+                             "against a given sphere pass method='quotient'")
         return _encode_polyhedral(mesh, L)
     coarse = len(mesh.faces) < REFINE_BELOW if refine == "auto" else bool(refine)
     if sphere is not None or not coarse:
@@ -158,14 +151,6 @@ def _encode_on(mesh, L, sphere, method) -> EncodeResult:
     """:func:`encode` on a mesh fine enough to map to the sphere as it is."""
     sph = base_sphere(mesh) if sphere is None else np.asarray(sphere, float)
     F = mesh.faces
-    if method == "direct":
-        from .geom import spin
-        from .geom.operators import vertex_areas
-
-        c0 = _enc.sh_project(spin.mesh_to_rho_direct(mesh, sph),
-                             _enc.real_sh_basis(sph, L), mass=vertex_areas(sph, F))
-        err = shape_error(mesh.vertices, decode(c0, sph))
-        return EncodeResult(coeffs=c0, sphere=sph, L=L, err=err, status="direct: measured, not optimised")
     from .geom.dirac_quotient import encode_quotient
 
     lift, Ls = _spectral_context(L)
@@ -241,8 +226,8 @@ def encode_dataset(meshes, L: int, method: str = "polyhedral", sphere=None,
     """Encode many meshes. Returns ``(coeffs (N, K), results)``.
 
     ``sphere=None``: each mesh on its own sphere map (``polyhedral``'s, or
-    :func:`base_sphere` for ``quotient`` / ``direct``). ``sphere=<array>`` (with
-    ``quotient`` or ``direct``): every mesh against that one sphere (meshes must
+    :func:`base_sphere` for ``quotient``). ``sphere=<array>`` (with
+    ``quotient``): every mesh against that one sphere (meshes must
     share its vertex count). ``n_jobs > 1`` uses a process pool; results stay in
     input order.
     """

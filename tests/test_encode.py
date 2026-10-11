@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from shapegen.geom import encode as enc
-from shapegen.geom import spin
 from shapegen.geom.mesh import icosphere
 
 
@@ -84,24 +83,3 @@ def test_procrustes_is_similarity_invariant():
     assert enc.procrustes(A, A) < 1e-20
 
 
-def test_direct_encoder_is_exact_on_spheres():
-    """``ρ = H·e^u − 1`` must vanish on a sphere at any radius: H = 1/R and
-    e^u = R, so the product is 1 and ρ is 0.
-
-    The *median* is the convergence quantity, not the max — an icosphere's 12
-    valence-5 vertices are a fixed tessellation artifact whose curvature error
-    does not shrink (exactly 12 vertices exceed 0.05 at every resolution).
-    """
-    from shapegen.geom.mesh import Mesh, icosphere
-    prev = None
-    for sub in (2, 3, 4):
-        m = icosphere(sub)
-        S = m.vertices / np.linalg.norm(m.vertices, axis=1, keepdims=True)
-        for R in (1.0, 2.5):                     # scale-invariant by construction
-            rho = spin.mesh_to_rho_direct(Mesh(S * R, m.faces), S)
-            assert int((np.abs(rho) > 0.05).sum()) == 12
-        med = float(np.median(np.abs(rho)))
-        if prev is not None:
-            assert med < prev / 2.0              # O(h^2) under refinement
-        prev = med
-    assert prev < 1e-3

@@ -131,9 +131,9 @@ def test_rho_quotient_pads_a_lower_band_spinor(closed):
     assert np.allclose(dq.rho_quotient(vt, L, LS, Lm), dq.rho_quotient(vp, L, LS))
 
 
-def test_codec_quotient_beats_direct():
-    """Decodes to exactly the error it reports, closed (γ ≈ 0), and well below the
-    ``direct`` measurement; ``close=False`` moves only ``ℓ = 0``."""
+def test_codec_quotient_is_closed_and_accurate():
+    """Decodes to exactly the error it reports, closed (γ ≈ 0), and accurate (0.021 on
+    this bottle at L=8); ``close=False`` moves only ``ℓ = 0``."""
     from shapegen.data.dataset import demo_bottle_meshes
 
     mesh = demo_bottle_meshes(n=1, subdiv=3, seed=0)[0]
@@ -141,6 +141,6 @@ def test_codec_quotient_beats_direct():
     r = codec.encode(mesh, L, sphere=sph, method="quotient")
     assert codec.shape_error(mesh.vertices, codec.decode(r.coeffs, sph)) == pytest.approx(r.err, rel=1e-6)
     assert r.gamma < 1e-10
-    assert r.err < 0.6 * codec.encode(mesh, L, sphere=sph, method="direct").err, r      # 0.021 vs 0.043
+    assert r.err < 0.03, r
     fast = dq.encode_quotient(mesh.vertices, sph, mesh.faces, L, close=False)["coeffs"]
     assert np.allclose(fast[1:], r.coeffs[1:])                  # closing moves only ℓ = 0

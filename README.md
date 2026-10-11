@@ -44,7 +44,7 @@ This repo builds a representation that is:
 |---|---|
 | fixed-dimensional | K numbers regardless of input resolution |
 | correspondence-free | no registration; any triangulation in |
-| invariant to rotation, translation and scale | by construction |
+| invariant to translation and scale | by construction (rotation: see *Canonicalise pose* below) |
 | total | **every z ∈ ℝ^K decodes to a valid surface**; there are no off-manifold codes that produce garbage |
 | self-scoring | the decoder returns a scalar residual γ measuring how exactly z is realisable |
 
@@ -90,7 +90,6 @@ are accuracy / speed trade-offs over the same inverse problem:
 | method | what it is | rel. error, heads, L=32 | time |
 |---|---|---|---|
 | `quotient` | the Dirac equation read pointwise off the target's spinor, corrected onto the decoder's | ~0.0077 | ~0.1 s (+0.65 s closing and scoring) |
-| `direct` | measure ρ from mesh curvature and project; no fitting | ~0.024 (3× worse) | < 1 s |
 | `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan (not comparable with the rows above) | 0.1–10 s; ~4 s per head |
 
 Error is Procrustes-aligned (rotation/translation/scale removed), relative to
@@ -159,7 +158,7 @@ quality.
 ![Heads sampled from the flow](docs/img/samples.png)
 
 *Codes sampled from a rectified flow trained on 360 heads at L=24 (an earlier
-run, from `reports/faces/faces_flow_rho.npz`), then decoded. No input mesh is involved.*
+run on the since-removed `direct` codes, from `reports/faces/faces_flow_rho.npz`), then decoded. No input mesh is involved.*
 
 ### Status
 
@@ -184,11 +183,10 @@ yet recorded here.
   and decode. If those shapes are broken, the latent isn't safe to sample from
   and model quality won't fix it. Totality guarantees a surface, not a
   plausible one.
-- **Canonicalise pose.** Otherwise orientation is learned as if it were shape
-  variation.
-- **Open: train/encode mismatch.** Training currently uses `direct` codes,
-  which are consistent across meshes but ~5× less accurate than the encoders
-  recommended in part 1.
+- **Canonicalise pose.** Against a shared sphere, a random rotation moves a
+  head's code by ~7% at L=32 (subjects differ by ~31%), so unaligned pose is
+  learned as if it were shape variation. `faces.build_dataset` Procrustes-aligns
+  by default.
 
 ---
 
@@ -257,7 +255,7 @@ if out["ok"]:
 | codec | `shapegen/codec.py` (entry point), `shapegen/geom/`, `shapegen/spectral/` |
 | generative | `shapegen/models/{basis,flow}.py`, `scripts/{build_dataset,encode_faces,train_faces}.py` |
 | mesh gen | `shapegen/quad/` (entry: `pipeline.py`), `scripts/quad_demo.py` |
-| figures | `scripts/readme_figures.py` → `docs/img/` |
+| figures | `scripts/readme_figures.py` → `docs/img/`; shared mesh renderer `scripts/render.py` |
 | shared | `shapegen/data/`, `shapegen/eval/` |
 
 ## Requirements

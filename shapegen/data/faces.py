@@ -13,9 +13,9 @@ stage            positions (PCA)     ρ̂ (spin codec)
 ``cap``          off                 **on** -- the sphere map and the ρ
                                      codec are defined for closed genus-0
                                      surfaces only
-``align``        on (worth 5-7%)     **off** -- ρ is exactly
-                                     rotation-invariant on a shared
-                                     template (measured 4e-15)
+``align``        on (worth 5-7%)     **on** -- ``quotient`` codes on a
+                                     shared sphere move ~7% under a
+                                     random rotation (L=32)
 ``smooth``       on                  **on**, t=1e-4
 ===============  ==================  ==================================
 
@@ -212,9 +212,8 @@ def build_dataset(roots, expressions="1_neutral", t_smooth: float = 1e-4,
     """``roots -> (X (N,n,3), F)``: loaded, aligned, smoothed heads.
 
     ``t_smooth=0`` skips smoothing (measurably worse, see the module docstring;
-    kept reachable so the difference stays testable). ``cap=True`` and
-    ``align=False`` for the ρ codec; ``align=True`` is worth 5-7% for a position
-    basis.
+    kept reachable so the difference stays testable). ``cap=True`` for the ρ codec. ``align=True`` (the default) for both: it is
+    worth 5-7% for a position basis, and ρ̂ codes see rotation.
 
     ``base="icosphere"`` resamples every head onto a uniform icosphere at
     ``subdiv`` and returns ``(X, F, sphere)`` instead. The correspondence is the

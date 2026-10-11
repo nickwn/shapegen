@@ -1,6 +1,6 @@
 """Lightweight triangle-mesh container and analytic test generators.
 
-The numerical kernels in ``operators.py`` / ``curvature.py`` / ``dirac.py`` take
+The numerical kernels in ``operators.py`` / ``dirac.py`` take
 bare ``(V, F)`` arrays (``V`` float64 ``(n,3)``, ``F`` int ``(m,3)``). ``Mesh`` is
 a thin convenience wrapper exposing trimesh-like attributes — ``vertices``,
 ``faces``, ``euler_number``, ``genus`` — without taking a hard dependency on

@@ -59,23 +59,19 @@ def mean_shape_error(A, B):
     return float(np.mean([codec.shape_error(A[i], B[i]) for i in range(len(A))]))
 
 
-def build_basis(kind, X, F, k, L, sphere=None, fields=None):
+def build_basis(kind, X, F, k, L, sphere=None):
     """One switch, so ``--basis`` is a real choice rather than an edit.
 
     For ρ the sphere is fitted once and reused across the whole sweep: ρ̂ is
     defined *relative to* a base sphere, and at sample time there is no mesh to
     recover one from, so it must be fixed in advance and shared by every code.
     Refitting it per bandwidth would silently compare codes of different meanings.
-
-    ``fields`` are cached per-vertex ρ. They do not depend on L, so passing them
-    turns the bandwidth sweep from ``N x |L|`` edge-least-squares solves into
-    ``N`` — the difference between minutes and hours on 26k-vertex heads.
     """
     if kind == "pca":
         return PCABasis.fit(X, k=k), f"PCA k={min(k, len(X) - 1)}", None
     if sphere is None:
         sphere = codec.base_sphere(Mesh(X.mean(0), F))
-    return (RhoBasis.fit(X, F, L, sphere, method="direct", fields=fields),
+    return (RhoBasis.fit(X, F, L, sphere),
             f"rho-hat L={L} ({codec.n_coeffs(L)} coeffs)", sphere)
 
 
@@ -102,54 +98,39 @@ def main():
     rho = a.basis == "rho"
 
     # ---------------------------------------------------------------- data --
-    # cap and align are decided by the representation, not by taste: rho needs a
-    # closed surface, and cannot see rotation at all (measured 4e-15), so
-    # aligning for it would be pure cost.
-    print(f"== dataset (basis={a.basis}, cap={rho}, align={not rho}) ==", flush=True)
-    sph = fields = None
+    # cap is decided by the representation: rho needs a closed surface. Both
+    # align: quotient codes on a shared sphere move ~7% under a random rotation
+    # (L=32, heads; ~31% between subjects), so pose would read as shape.
+    print(f"== dataset (basis={a.basis}, cap={rho}, align=True) ==", flush=True)
+    sph = None
     if a.cache:
         d = np.load(a.cache)
-        X, F, sph, fields = d["X"], d["faces"], d["sphere"], d["fields"]
-        print(f"cache {a.cache}: {len(X)} heads, sphere and rho fields included",
-              flush=True)
+        X, F, sph = d["X"], d["faces"], d["sphere"]
+        print(f"cache {a.cache}: {len(X)} heads, sphere included", flush=True)
     else:
         out = faces.build_dataset(roots, t_smooth=a.t_smooth, limit=a.limit,
-                                  cap=rho, align=not rho,
+                                  cap=rho, align=True,
                                   base="icosphere" if rho else "native",
                                   remesh=0.8 if rho else None, verbose=True)
         X, F, sph = out if rho else (*out, None)
     n_hold = min(a.holdout, len(X) // 4)
     Xtr, Xte = X[:-n_hold], X[-n_hold:]
-    f_tr = f_te = None
-    if fields is not None:
-        f_tr, f_te = fields[:-n_hold], fields[-n_hold:]
     print(f"train {len(Xtr)}, held-out {len(Xte)}, {X.shape[1]} verts\n", flush=True)
 
     print("== representation ==", flush=True)
-    if rho and fields is None:
-        # Fields BEFORE the first fit, not after: they do not depend on L, so
-        # computing them up front means the whole bandwidth sweep costs one pass
-        # over the data instead of one per bandwidth.
-        if sph is None:
-            sph = codec.base_sphere(Mesh(Xtr.mean(0), F))
-        fields = RhoBasis(sph, F, L=1).rho_fields(X)
-        f_tr, f_te = fields[:-n_hold], fields[-n_hold:]
-        print(f"       rho fields {fields.shape} computed once for the sweep",
-              flush=True)
-    basis, label, sph = build_basis(a.basis, Xtr, F, a.k, a.L, sphere=sph,
-                                    fields=f_tr)
+    basis, label, sph = build_basis(a.basis, Xtr, F, a.k, a.L, sphere=sph)
     kdim = basis.k
     print(f"       {label}", flush=True)
 
     # 1. Basis-appropriate sanity. PCA at full rank spans the centred training
     #    set exactly; for rho the basis must reproduce codec.encode(method=
-    #    "direct") on the same sphere.
+    #    "quotient") on the same sphere (the basis skips the closing solve, which
+    #    moves only l = 0 and not the decode).
     if rho:
-        e_b = mean_shape_error(Xtr[:6],
-                               basis.decode(basis.encode(Xtr[:6], fields=f_tr[:6])))
+        e_b = mean_shape_error(Xtr[:6], basis.decode(basis.encode(Xtr[:6])))
         e_c = float(np.mean([codec.encode(Mesh(x, F), a.L, sphere=basis.sphere,
-                                          method="direct").err for x in Xtr[:6]]))
-        check("basis agrees with the codec", abs(e_b - e_c) < 1e-6 * max(e_c, 1.0),
+                                          method="quotient").err for x in Xtr[:6]]))
+        check("basis agrees with the codec", abs(e_b - e_c) < 1e-3 * e_c,
               f"basis {e_b:.5f} vs codec {e_c:.5f}")
     else:
         full = PCABasis.fit(Xtr, k=len(Xtr))
@@ -161,7 +142,7 @@ def main():
     # A rho decode is a spectral solve (seconds per head), so the reconstruction
     # checks run on a subset. PCA decodes are a matrix product and use everything.
     nd = 12 if rho else len(Xte)
-    enc_te = ((lambda b: b.encode(Xte[:nd], fields=f_te[:nd])) if rho
+    enc_te = ((lambda b: b.encode(Xte[:nd])) if rho
               else (lambda b: b.encode(Xte)))
     err = mean_shape_error(Xte[:nd], basis.decode(enc_te(basis)))
     print(f"       held-out reconstruction: {err:.5f}"
@@ -169,7 +150,7 @@ def main():
     for s in ((4, 8, 12, 16) if rho else (8, 16, 32, 64)):
         if not rho and s > len(Xtr) - 1:
             continue
-        b, _, _ = build_basis(a.basis, Xtr, F, s, s, sphere=sph, fields=f_tr)
+        b, _, _ = build_basis(a.basis, Xtr, F, s, s, sphere=sph)
         print(f"         {'L' if rho else 'k'}={s:4d}  "
               f"{mean_shape_error(Xte[:nd], b.decode(enc_te(b))):.5f}", flush=True)
     check("held-out reconstruction is sane", 0.0 < err < 0.3, f"{err:.5f}")
@@ -178,24 +159,19 @@ def main():
     #    the scan noise -- so verify it rather than trusting the default.
     if a.t_smooth > 0:
         ro = faces.build_dataset(roots, t_smooth=0.0, limit=a.limit, cap=rho,
-                                 align=not rho,
+                                 align=True,
                                  base="icosphere" if rho else "native",
                                  remesh=0.8 if rho else None)
         Xr = ro[0]
-        fr = RhoBasis(sph, F, L=1).rho_fields(Xr) if rho else None
-        br, _, _ = build_basis(a.basis, Xr[:-n_hold], F, a.k, a.L, sphere=sph,
-                               fields=fr[:-n_hold] if rho else None)
-        er = mean_shape_error(
-            Xr[-n_hold:][:nd],
-            br.decode(br.encode(Xr[-n_hold:][:nd],
-                                fields=fr[-n_hold:][:nd] if rho else None)))
+        br, _, _ = build_basis(a.basis, Xr[:-n_hold], F, a.k, a.L, sphere=sph)
+        er = mean_shape_error(Xr[-n_hold:][:nd], br.decode(br.encode(Xr[-n_hold:][:nd])))
         check("smoothing improves the curve", err < er,
               f"smoothed {err:.5f} vs raw {er:.5f} ({er / err:.2f}x)")
 
     # 4. The flow loss is an unweighted MSE in code space; unwhitened codes make
     #    it fit the largest coordinates and ignore the rest. rho is whitened
     #    band-wise, so its per-coefficient std is near 1 rather than exactly 1.
-    Z = basis.encode(Xtr, fields=f_tr) if rho else basis.encode(Xtr)
+    Z = basis.encode(Xtr)
     mx, sx = np.abs(Z.mean(0)).max(), Z.std(0)
     if rho:
         # RhoBasis whitens BAND-wise, pooling the 2l+1 coefficients of each band,
@@ -226,17 +202,6 @@ def main():
     print(f"       effective dimension: participation ratio {d_eff:.1f}, "
           f"{d99} directions hold 99% of {kdim} nominal; "
           f"N/d_eff = {len(Z) / d_eff:.1f}", flush=True)
-
-    # 8. rho-specific: codes on a shared template must be rotation-invariant.
-    if rho:
-        rng = np.random.default_rng(0)
-        Q, _ = np.linalg.qr(rng.standard_normal((3, 3)))
-        if np.linalg.det(Q) < 0:
-            Q[:, 0] *= -1
-        z0, z1 = basis.encode(Xte[:3]), basis.encode(Xte[:3] @ Q)
-        rel = np.linalg.norm(z0 - z1) / max(np.linalg.norm(z0), 1e-30)
-        check("rho-hat is rotation-invariant", rel < 1e-6,
-              f"{rel:.2e} under a random rotation")
 
     # ---------------------------------------------------------------- flow --
     print(f"\n== flow matching (sigma={a.sigma}, t_end={a.t_end}) ==", flush=True)

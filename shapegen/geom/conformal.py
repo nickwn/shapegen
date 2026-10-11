@@ -1,11 +1,8 @@
-"""Conformal-map utilities on the sphere: the Möbius gauge fix and the
-edge-length conformal factor.
+"""Conformal-map utilities on the sphere: the Möbius gauge fix.
 
-* :func:`mobius_normalize` drives the conformal (source-area-weighted)
-  barycenter of a sphere parameterisation to the origin via ball automorphisms,
-  killing the 3-parameter Möbius boost freedom and leaving only rotation.
-* :func:`u_edge_lsq` fits the log conformal factor of a sphere → surface map
-  from edge lengths.
+:func:`mobius_normalize` drives the conformal (source-area-weighted) barycenter
+of a sphere parameterisation to the origin via ball automorphisms, killing the
+3-parameter Möbius boost freedom and leaving only rotation.
 
 The map itself is :func:`shapegen.geom.eigen_sphere.conformal_sphere` (it
 replaced conformalized mean-curvature flow on 2026-09-27).
@@ -14,19 +11,12 @@ replaced conformalized mean-curvature flow on 2026-09-27).
 from __future__ import annotations
 
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg as spla
 
 from .mesh import Mesh
 from .operators import vertex_areas
 
-__all__ = [ "mobius_normalize", "ball_automorphism",
-           "u_edge_lsq"]
+__all__ = ["mobius_normalize", "ball_automorphism"]
 
-
-# --------------------------------------------------------------------------- #
-# Conformalized mean-curvature flow (mesh -> sphere)
-# --------------------------------------------------------------------------- #
 
 # --------------------------------------------------------------------------- #
 # Ball automorphisms + Möbius normalization
@@ -78,37 +68,5 @@ def mobius_normalize(mesh: Mesh, sph: np.ndarray, iters: int = 100,
 # --------------------------------------------------------------------------- #
 # mesh -> σ̂
 # --------------------------------------------------------------------------- #
-
-
-def u_edge_lsq(S: np.ndarray, B: np.ndarray, E: np.ndarray):
-    """Log conformal factor ``u`` of the map ``S → B``, by edge least squares.
-
-    Ported from ``rho_codec_pkg`` (rt/param/ufactor.py). For a conformal map every
-    edge scales by the local factor, so
-
-        (u_i + u_j)/2 = log( |B_j − B_i| / |S_j − S_i| )
-
-    is one equation per edge — overdetermined, and solved by LSQR. Uniquely
-    solvable because triangles are odd cycles, which kills the alternating
-    null space a bipartite graph would have.
-
-    This is far better than the lumped-area estimate ``e^u = √(a_B/a_S)``: it is
-    exact to ~7e-14 on genuinely conformal input, where the area ratio carries the
-    full O(h²) error of the mass lumping. ``ρ = H·e^u − 1`` inherits that error
-    directly, so it is a first-order term for the direct encoder.
-
-    Returns ``(u, residual_norm)``. The residual is a useful diagnostic on its own:
-    it measures how far the correspondence is from conformal, so a large value
-    means the map has shear the spin transform cannot express.
-    """
-    l0 = np.linalg.norm(S[E[:, 1]] - S[E[:, 0]], axis=1)
-    l1 = np.linalg.norm(B[E[:, 1]] - B[E[:, 0]], axis=1)
-    m, N = len(E), len(S)
-    A = sp.coo_matrix((np.full(2 * m, 0.5),
-                       (np.repeat(np.arange(m), 2), E.ravel())),
-                      shape=(m, N)).tocsr()
-    out = spla.lsqr(A, np.log(np.maximum(l1, 1e-300) / np.maximum(l0, 1e-300)),
-                    atol=1e-14, btol=1e-14, iter_lim=8000)
-    return out[0], float(out[3])
 
 

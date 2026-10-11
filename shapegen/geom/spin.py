@@ -1,17 +1,10 @@
-"""Measuring ``ρ`` from a mesh and its sphere correspondence.
-
-:func:`mesh_to_rho_direct` -- the *direct* measurement ``ρ = H·e^u − 1`` -- is
-what training uses and the starting point of the encoders
-(:mod:`shapegen.codec`, :mod:`shapegen.models.basis`). The sphere
-correspondence normally comes from
-:func:`shapegen.geom.eigen_sphere.conformal_sphere`.
-
-The rest reads the spinor off a correspondence ``f₀: S² → M``: a conformal map
+"""The spinor of a mesh, read off its sphere correspondence ``f₀: S² → M``
+(normally :func:`shapegen.geom.eigen_sphere.conformal_sphere`): a conformal map
 is a spin transform ``df = λ̄ df₀ λ``, so ``λ`` is the similarity part of each
 face's affine map (no solve), sign-aligned along the best-agreeing spanning tree
 of the dual graph (the ±λ spin structure; consistent on genus 0). Projecting with
 :func:`shapegen.geom.dirac.rho_from_lambda` gives the mesh reference solver's
-``ρ``. :func:`qc_distortion` and :func:`base_sphere_residual` are diagnostics.
+``ρ``. :func:`qc_distortion` is a diagnostic.
 """
 
 from __future__ import annotations
@@ -25,30 +18,8 @@ from .mesh import triangle_areas
 __all__ = [
     "rotation_to_quaternion", "face_lambdas", "face_spinors", "align_signs",
     "lambda_from_correspondence",
-    "qc_distortion", "mesh_to_rho_direct", "base_sphere_residual",
+    "qc_distortion",
 ]
-
-
-def base_sphere_residual(sph, faces) -> float:
-    """Self-test for a base sphere: ``rho`` of the sphere against **itself**.
-
-    Area-weighted RMS of :func:`mesh_to_rho_direct` of the sphere onto
-    itself; ideally 0 (``H = 1``, ``e^u = 1``). A large value means the
-    triangulation cannot support the curvature operator pointwise, i.e. the
-    sphere is badly conditioned (an icosphere at subdiv 5 gives 0.004; below
-    ~0.05 is fine).
-
-    Trap: this is a discretisation warning, not a verdict. It probes ``H`` on
-    the sphere, which the codec never computes (``H`` is taken on the target),
-    and a sphere with a large score can still decode serviceably.
-    """
-    import numpy as _np  # noqa: PLC0415
-    from .mesh import Mesh  # noqa: PLC0415
-    from .operators import vertex_areas  # noqa: PLC0415
-    sph = _np.asarray(sph, dtype=float)
-    r = mesh_to_rho_direct(Mesh(sph, faces), sph)
-    w = vertex_areas(sph, faces)
-    return float(_np.sqrt((r ** 2 * w).sum() / w.sum()))
 
 
 def rotation_to_quaternion(R: np.ndarray) -> np.ndarray:
@@ -200,34 +171,3 @@ def qc_distortion(S, T, F):
     return float((w * ((sv[:, 0] - sv[:, 1]) / (sv[:, 0] + sv[:, 1]))).sum() / w.sum())
 
 
-def mesh_to_rho_direct(mesh, sph, return_diagnostics=False):
-    """The **direct** local encoder: ``ρ = H·e^u − 1``, no spin transform.
-
-    ``sph`` is the sphere position of each vertex of ``mesh`` (shared faces):
-
-    * ``H`` — signed mean curvature of the **target** mesh, calibrated so a unit
-      sphere gives ``H = +1`` (``CONVENTIONS.md``: outward normal, convex-positive);
-    * ``e^u`` — the conformal factor of the map ``sph → mesh``, from
-      :func:`~shapegen.geom.conformal.u_edge_lsq`, which solves
-      ``(u_i+u_j)/2 = log(|B_j−B_i|/|S_j−S_i|)`` over every edge and is exact to
-      3e-16 on conformal input (trap: a lumped area ratio instead carries an
-      O(h²) error straight into ρ);
-    * the ``−1`` is the base sphere's own ``H·e^u``, making ρ a *change* in
-      mean-curvature half-density.
-
-    ``return_diagnostics`` also returns ``{"u", "H", "u_resid"}``; ``u_resid``
-    (the LSQR residual) measures how far the correspondence is from conformal,
-    i.e. shear ρ cannot express.
-    """
-    from .conformal import u_edge_lsq  # noqa: PLC0415
-    from .curvature import mean_curvature  # noqa: PLC0415
-    from .operators import edge_cotan_weights  # noqa: PLC0415
-
-    V, F = mesh.vertices, mesh.faces
-    E, _ = edge_cotan_weights(np.asarray(sph, dtype=float), F)
-    u, resid = u_edge_lsq(np.asarray(sph, dtype=float), V, E)
-    H = mean_curvature(V, F)[0]
-    rho = H * np.exp(u) - 1.0
-    if return_diagnostics:
-        return rho, {"u": u, "H": H, "u_resid": resid}
-    return rho

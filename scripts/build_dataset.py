@@ -71,11 +71,9 @@ def main() -> None:
     ap.add_argument("--subdiv", type=int, default=3)
     ap.add_argument("--L", type=int, default=12, help="SH bandwidth of the latent")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--method", choices=codec.METHODS, default="direct",
-                    help="direct: rho measured and projected, milliseconds per "
-                         "mesh, comparable across meshes (what training uses). "
-                         "quotient: the Dirac equation read off the target's "
-                         "spinor, several times more accurate, ~1 s per mesh")
+    ap.add_argument("--method", choices=("quotient",), default="quotient",
+                    help="encoder; the dataset shares one template sphere, which "
+                         "only quotient encodes against")
     ap.add_argument("--out", type=str, default="reports/dataset.npz")
     args = ap.parse_args()
 
