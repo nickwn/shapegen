@@ -1,7 +1,8 @@
-"""The exact polyhedral encoder (:mod:`shapegen.geom.poly_conformal`,
-``codec.encode(method="polyhedral")``): the start is the discrete uniformization,
-the sphere map is exact, its period Jacobian is exact, and the code depends on
-the polyhedron, not on its tessellation."""
+"""The polyhedral map and encode (``codec.encode(method="polyhedral")``): the start
+is the discrete uniformization, the exact map's Newton solve (:class:`EdgeSystem`,
+the encoder's fallback) reaches round-off, the face developments of
+:mod:`shapegen.geom.poly_conformal` agree with the edge periods, and the code
+depends on the polyhedron, not on its tessellation."""
 
 from __future__ import annotations
 
@@ -99,6 +100,30 @@ def prism(n):
     return V, np.array(F)
 
 
+def solve_map(V, F):
+    """The polyhedron's exact sphere map: :meth:`EdgeSystem.solve` from its discrete
+    uniformization (the encoder's fallback on very coarse meshes). Returns
+    ``(X, info)``."""
+    from shapegen.geom.edge_periods import EdgeSystem
+    from shapegen.geom.uniformize import uniformize
+
+    X, _u, info = EdgeSystem(V, F).solve(uniformize(V, F))
+    return X, info
+
+
+def congruence(V, F, X):
+    """Largest deviation of a developed face from its 3D triangle (log side ratio,
+    angle), every face developed from its vertex-mean chart centre."""
+    pm = pc.PolyMap(V, F, S0=X)
+    _, _, D = pm._develop_at(X, np.arange(len(F)), X[F].mean(1))
+    return pm._shape_err(D)[0].max()
+
+
+def encode(V, F, L):
+    from shapegen.geom.chord_map import encode_chord
+    return encode_chord(V, F, L)["coeffs"]
+
+
 def test_angle_defects_find_only_the_corners():
     V, F = cube_mesh(3)
     k = pc.angle_defects(V, F)
@@ -164,7 +189,7 @@ def test_edge_periods_match_face_developments():
     X = es.centre(X / np.linalg.norm(X, axis=1, keepdims=True))
     I = np.abs(es.periods(X))
     pm = pc.PolyMap(V, F, S0=X)
-    D = pm.develop(pm.z)
+    _, _, D = pm._develop_at(X, np.arange(len(F)), X[F].mean(1))
     for k in range(3):
         i, j = F[:, k], F[:, (k + 1) % 3]
         e = np.searchsorted(es.E[:, 0] * len(V) + es.E[:, 1], np.minimum(i, j) * len(V) + np.maximum(i, j))
@@ -177,8 +202,8 @@ def test_cone_opposite_a_face():
     """A regular tetrahedron's vertex sits at the pole of the opposite face's chart."""
     V = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1.0]])
     F = np.array([[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]])
-    pm = pc.solve_map(V, F)
-    assert pm.fit["max"] < 1e-12, pm.fit
+    _, info = solve_map(V, F)
+    assert info["max"] < 1e-12, info
 
 
 @pytest.mark.parametrize("make", [lambda: hull_poly(seed=0), hull_poly, star,
@@ -187,42 +212,28 @@ def test_hard_starts_converge(make):
     """Spiky hulls (the face solver stalled on hull0) and a start with folded faces
     (star) reach round-off, and the face development agrees."""
     V, F = make()
-    pm = pc.solve_map(V, F)
-    assert pm.fit["max"] < 1e-10, pm.fit
-    assert np.abs(pm.residual(np.r_[pm.z.real, pm.z.imag, pm.logc])).max() < 1e-10
+    X, info = solve_map(V, F)
+    assert info["max"] < 1e-10, info
+    assert congruence(V, F, X) < 1e-10
 
 
 def test_prism_encodes_deterministically():
     """Fanned caps make the sample density jump across edges, which disconnected the
     sign-alignment graph. The rotation gauge makes repeat encodes identical."""
     V, F = prism(12)
-    a, b = (pc.encode_polyhedral(V, F, L)["coeffs"] for _ in range(2))
+    a, b = (encode(V, F, L) for _ in range(2))
     assert np.allclose(a, b, atol=1e-12)
 
 
 @pytest.mark.parametrize("mesh", ["cube", "box", "hull", "hull_sub2"])
 def test_sphere_map_is_exact(mesh):
-    """Every face's developed triangle is congruent to its 3D triangle; the
-    closed-form spinor of the code's quadrature is :meth:`spinor_at`'s, with one
-    sign over the whole sphere (the jump rule holds on every edge); the quadrature
-    has converged."""
-    from shapegen.geom import dirac_spectral as ds
-
+    """The map's Newton solve reaches round-off with equal scales (a true root), and
+    every face's developed triangle is congruent to its 3D triangle."""
     V, F = {"cube": lambda: cube_mesh(1), "box": lambda: cube_mesh(1, dims=(1, 2, 3)),
             "hull": hull_poly, "hull_sub2": lambda: subdivide_flat(*hull_poly(), 2)}[mesh]()
-    pm = pc.solve_map(V, F)
-    assert pm.fit["max"] < 1e-10 and pm.fit["u_spread"] < 1e-9, pm.fit
-    assert np.abs(pm.residual(np.r_[pm.z.real, pm.z.imag, pm.logc])).max() < 1e-10
-    pm.gauge_cones()
-    Ls = ds.spinor_band(L, ds.potential_band_extra(L))
-    x, w, lam, f = pm.sphere_quadrature(Ls)
-    assert pm.sign_defects == 0 and pm.jump_err < 1e-10
-    ref, _ = pm.spinor_at(x, f)
-    assert np.allclose(np.abs(np.einsum("ij,ij->i", lam, ref) / np.einsum("ij,ij->i", ref, ref)), 1, atol=1e-10)
-    x2, w2, lam2, _ = pm.sphere_quadrature(Ls, qmin=4)
-    moments = lambda x_, w_, l_: (w_[:, None] * l_).T @ np.c_[np.ones(len(x_)), x_]   # noqa: E731
-    m1, m2 = moments(x, w, lam), moments(x2, w2, lam2)
-    assert np.abs(m1 - m2).max() < 1e-5 * np.abs(m2).max()
+    X, info = solve_map(V, F)
+    assert info["max"] < 1e-10 and info["u_spread"] < 1e-9, info
+    assert congruence(V, F, X) < 1e-10
 
 
 def test_code_is_tessellation_invariant():
@@ -230,12 +241,12 @@ def test_code_is_tessellation_invariant():
     the codes themselves agree (the rotation is fixed by the cones), to the
     quadrature's error (measured: cube 5e-7, hull 1.6e-6; small faces next to
     strong cones held this at 1.3e-4 before the cone term in the order rule)."""
-    ref = pc.encode_polyhedral(*cube_mesh(1), L)["coeffs"]
+    ref = encode(*cube_mesh(1), L)
     for V, F in (cube_mesh(4, flip=True), subdivide_flat(*cube_mesh(1), 2)):
-        c = pc.encode_polyhedral(V, F, L)["coeffs"]
+        c = encode(V, F, L)
         assert np.linalg.norm(c - ref) < 5e-6 * np.linalg.norm(ref)
-    ref = pc.encode_polyhedral(*hull_poly(), L)["coeffs"]
-    c = pc.encode_polyhedral(*subdivide_flat(*hull_poly(), 2), L)["coeffs"]
+    ref = encode(*hull_poly(), L)
+    c = encode(*subdivide_flat(*hull_poly(), 2), L)
     assert np.linalg.norm(c - ref) < 1e-5 * np.linalg.norm(ref)
 
 
@@ -279,5 +290,5 @@ def test_near_flat_face_rows_are_flipped():
     F = np.r_[F[1:], [[0, 1, 4], [1, 2, 4], [2, 0, 4]]]
     es = EdgeSystem(V, F)
     assert (np.sort(es.F, 1) != np.sort(F, 1)).any(1).sum() == 2
-    pm = pc.solve_map(V, F)
-    assert pm.fit["max"] < 1e-10 and pm.fit["u_spread"] < 1e-9, pm.fit
+    _, info = solve_map(V, F)
+    assert info["max"] < 1e-10 and info["u_spread"] < 1e-9, info

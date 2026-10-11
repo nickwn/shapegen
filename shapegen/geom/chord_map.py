@@ -80,8 +80,8 @@ points 0.7 s (:func:`surface_samples`). They
 took ~62 s before uniformize's minimum-degree ordering was relabelled (53 s of it
 in SuperLU's ordering on the icosphere numbering).
 
-**Against the exact encoder** (:func:`~shapegen.geom.poly_conformal.encode_polyhedral`
-with ``exact=True``), both scored on its true surface points, L=16: cube 0.0107 vs
+**Against the exact encoder** (a global Newton fit and a closed-form curved-patch
+spinor quadrature; removed 2026-10-11 after this comparison), both scored on its true surface points, L=16: cube 0.0107 vs
 0.0113, demo bottle (162 / 642 / 2562 vertices) 0.00624 / 0.00297 / 0.00145 vs
 0.00626 / 0.00301 / 0.00149, ellipsoid (162 / 642 / 2562) 0.00113 / 0.000315 /
 0.000213 vs 0.00111 / 0.000317 / 0.000214; 0.3–2.0 s against 0.15–7.8 s. At L=8 a box
@@ -499,7 +499,7 @@ class MobiusFaces:
 
     def spinor(self, x, f):
         """λ (quaternion, sign arbitrary per point) at sphere points ``x`` in faces ``f``:
-        ``dX = M_f'(ζ) dζ`` written as a rotation and scale (:meth:`PolyMap.spinor_at`)."""
+        ``dX = M_f'(ζ) dζ`` written as a rotation and scale."""
         from ..spectral.quaternion import qconj
         from .spin import rotation_to_quaternion
 
@@ -798,8 +798,9 @@ def flat_reduce(V, F, tol: float = 1e-9):
 
 def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: float | None = None,
                  n_check: int = 6000) -> dict:
-    """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring). Returns the
-    dict of :func:`~shapegen.geom.poly_conformal.encode_polyhedral`."""
+    """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring). Returns
+    ``{"coeffs", "sphere"`` (per input vertex), ``"gamma", "f_hat", "samples":
+    (sphere points, weights, true surface points), "map", "info"}``."""
     from ..quad.lift import frame_quaternion
     from ..spectral.quaternion import qconj, qmul
     from . import dirac_spectral as ds
@@ -841,7 +842,7 @@ def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: flo
     fs = np.unique(np.linspace(0, len(F) - 1, max(1, min(len(F), n_check // 3))).astype(int))
     xc, Xc, nbad = surface_samples(V, F, X, fs)
     info["times"]["samples"] = time.perf_counter() - t
-    info.update(solver="fast", nodes=len(xs), sphere_weight=float(w.sum()), sample_faces_dropped=nbad,
+    info.update(nodes=len(xs), sphere_weight=float(w.sum()), sample_faces_dropped=nbad,
                 reduced=None if red is None else (len(V), len(F)))
     if red is not None:                         # the input's vertices: kept ones, dropped ones by their face's map
         Xin = np.zeros((len(V0), 3))

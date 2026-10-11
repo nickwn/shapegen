@@ -1,7 +1,7 @@
 """The fast polyhedral encoder (:mod:`shapegen.geom.chord_map`): its local periods
 are the exact periods when every cone is near, its Möbius spinor is the derivative
 of its own face maps, its nodes tile the sphere, it scores within a few percent of
-the exact encoder, and it sees the polyhedron, not the triangulation."""
+the exact encoder it replaced, and it sees the polyhedron, not the triangulation."""
 
 from __future__ import annotations
 
@@ -78,25 +78,23 @@ def test_sphere_nodes_tile_the_sphere():
     assert len(np.unique(f)) == len(F)
 
 
-def test_encode_is_near_the_exact_encoder():
-    """Scored on the exact encoder's true surface points, the encode is within a few
-    percent of it (measured at L=8: a 400-vertex ellipsoid, a flat-subdivided hull
-    +3.5 %), and its own check points are true surface points too."""
+def test_encode_is_near_the_removed_exact_encoder():
+    """Scored on its own true surface points, the encode is within a few percent of
+    the exact encoder it replaced, whose errors here (L=8, on its true surface
+    points) are pinned: a 400-vertex ellipsoid 0.0026533 (this encode 0.0026622),
+    a flat-subdivided hull 0.093193 (this encode 0.0670 on its own points: the flat
+    reduction changes which faces carry them; 0.0965 on the exact encoder's)."""
     from shapegen import codec
     from shapegen.geom.encode import eval_real_sh
     from .test_poly_conformal import subdivide_flat
 
     L = 8
     lift, Ls = codec._spectral_context(L)
-    for V, F in (fib_ellipsoid(400), subdivide_flat(*hull_poly(), 2)):
-        e = pc.encode_polyhedral(V, F, L, lift=lift, Ls=Ls, exact=True)
-        c = pc.encode_polyhedral(V, F, L, lift=lift, Ls=Ls)
-        assert c["info"]["solver"] == "fast" and c["gamma"] < 1e-10
-        xs, _, Xs = e["samples"]
-        err = [codec.shape_error(Xs, eval_real_sh(xs, o["f_hat"], lift.Lf)) for o in (e, c)]
-        assert err[1] < 1.06 * err[0], err
+    for (V, F), ref in ((fib_ellipsoid(400), 0.0026533), (subdivide_flat(*hull_poly(), 2), 0.093193)):
+        c = cm.encode_chord(V, F, L, lift=lift, Ls=Ls)
+        assert c["gamma"] < 1e-10
         xs, _, Xs = c["samples"]
-        assert codec.shape_error(Xs, eval_real_sh(xs, c["f_hat"], lift.Lf)) < 1.1 * err[0]
+        assert codec.shape_error(Xs, eval_real_sh(xs, c["f_hat"], lift.Lf)) < 1.06 * ref
 
 
 def test_flat_reduce():

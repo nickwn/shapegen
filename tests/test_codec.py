@@ -58,7 +58,7 @@ def test_default_method_is_polyhedral_and_refuses_a_sphere():
     """The default computes its own sphere map; a given sphere needs a method that
     encodes against one, and the error says which."""
     mesh = demo_bottle_meshes(n=1, subdiv=2, seed=0)[0]
-    assert codec.encode(mesh, L=4).meta["solver"] in ("exact", "fast")
+    assert "err_surface" in codec.encode(mesh, L=4).meta
     with pytest.raises(ValueError, match="quotient"):
         codec.encode(mesh, L=4, sphere=codec.base_sphere(mesh))
 

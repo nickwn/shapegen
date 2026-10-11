@@ -351,8 +351,8 @@ class EdgeSystem:
         ``|Re w|, |Im w| ≤ HALF`` (the FMM's Taylor series about ``c_e``) and those
         beyond it (one series about the chart centre). Imaginary constants are
         dropped: they rotate ``I_e``, which nothing reads. The scale is that of the
-        face charts' ``K_f W`` (twice the length element above), so ``u`` is
-        :class:`~shapegen.geom.poly_conformal.PolyMap`'s ``log c``. With ``local``
+        face charts' ``K_f W`` (twice the length element above), so ``u`` is the
+        charts' log scale ``log c``. With ``local``
         only its edges are integrated, from its cached far field (others are 0)."""
         from .log_fmm import far_taylor
 

@@ -103,21 +103,19 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
       Weaker on smooth shapes at low L (see its module). Deterministic.
     * ``"polyhedral"`` (default): reads the mesh literally as a polyhedron (closed,
       genus 0) and computes its conformal sphere map and spinor
-      (:func:`shapegen.geom.poly_conformal.encode_polyhedral`). There is no remesh and
+      (:func:`shapegen.geom.chord_map.encode_chord`). There is no remesh and
       no eigen sphere, so ``sphere`` and ``refine`` do not apply. The mesh is used
       as given (no remesh, no decimation), except that planar regions are
       retriangulated from their points and non-cone vertices in them dropped, so
       the code depends only on the polyhedron (a cube's 12-triangle, flipped
-      192-triangle and flat-subdivided meshes: identical codes). One path for every
-      mesh (:mod:`shapegen.geom.chord_map`): the discrete conformal map on the
+      192-triangle and flat-subdivided meshes: identical codes). The discrete
+      conformal map on the
       mesh's triangulation corrected by edge periods (exact ones where the local
       estimate moves the map measurably: coarse meshes), and a piecewise-Möbius
       spinor with curved-edge corrections. On coarse meshes it is within −5 … +2 %
-      of the exact encoder (``encode_polyhedral(exact=True)``, L=16: cube, demo
+      of the exact encoder it replaced (removed 2026-10-11; L=16: cube, demo
       bottle and ellipsoid at 162–2562 vertices; a spiky 9-vertex hull +13 %) in
-      0.3–2 s. A raw 26k-vertex FaceScape head encoded in ~4 s and decoded as the
-      exact map (~20 min) does (measured before the curved-edge corrections) (L=32: vertex 0.0684, surface 0.0688; face region
-      0.0260 vs 0.0250); a smoothed 40962-vertex icosphere-6 head in 7–8 s.
+      0.3–2 s. A smoothed 40962-vertex icosphere-6 head encodes in 7–8 s.
       Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
       they are not interchangeable with the other methods'.
       ``res.meta["err_surface"]`` scores the decode over the whole surface.
@@ -163,12 +161,11 @@ def _encode_on(mesh, L, sphere, method) -> EncodeResult:
 
 
 def _encode_polyhedral(mesh, L) -> EncodeResult:
-    """``method="polyhedral"``: the sphere map of the polyhedron itself (exact, or the
-    fast one on dense meshes)."""
-    from .geom.poly_conformal import encode_polyhedral
+    """``method="polyhedral"``: the sphere map of the polyhedron itself."""
+    from .geom.chord_map import encode_chord
 
     lift, Ls = _spectral_context(L)
-    o = encode_polyhedral(mesh.vertices, mesh.faces, L, lift=lift, Ls=Ls)
+    o = encode_chord(mesh.vertices, mesh.faces, L, lift=lift, Ls=Ls)
     sph = o["sphere"]
     V = np.asarray(mesh.vertices, float)
     # dense score: the decode at the quadrature samples against their exact surface points
@@ -178,7 +175,7 @@ def _encode_polyhedral(mesh, L) -> EncodeResult:
     err = shape_error(V, _eval_sh(sph, o["f_hat"], lift.Lf)) if len(V) >= 4 else float("nan")
     err_surface = shape_error(Xs[sel], _eval_sh(xs[sel], o["f_hat"], lift.Lf))
     info = o["info"]
-    return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err, gamma=o["gamma"], status=f"polyhedral: {info['solver']} sphere map, not optimised",
+    return EncodeResult(coeffs=o["coeffs"], sphere=sph, L=L, err=err, gamma=o["gamma"], status="polyhedral: chord sphere map, not optimised",
                         meta={"err_surface": err_surface, "gauge": "cones", **info})
 
 
