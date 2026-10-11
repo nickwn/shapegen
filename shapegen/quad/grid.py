@@ -811,17 +811,12 @@ def cell_for_faces(cones, idx, n_faces: int, n_samples: int = 200_000) -> float:
     """The cell size whose grid has about ``n_faces`` faces --
     ``sqrt(developed_area / n_faces)``.
 
-    Without it, :func:`~shapegen.quad.periods.solve_lattice` returns the
-    *largest* cell in its stock sweep that solves, which depends on the cone
-    layout rather than on what the caller wants (a 2-7x face-count span
-    across heads with the same 8 cones at L=32).
-
     **Trap: the result is a request, not a usable cell size -- do not pass it
     straight to :func:`quad_grid`.** Only cell sizes the period solve accepts
     make the grid close (on the cube, only ``edge/m`` for integer ``m``; 200
     faces asks for ``edge/5.77``, which traces to Euler characteristic
-    ``-5430``). Use it as the top of a *descending* ``cell_sizes`` ladder
-    (:func:`shapegen.quad.pipeline.cell_ladder`) and take what comes back.
+    ``-5430``). Pass it to :func:`~shapegen.quad.periods.solve_lattice`,
+    which moves the cones so that it closes, or reports that it cannot.
 
     The prediction is good to a few percent (cone faces cover 3/4 or 5/4 of
     a cell; the integrand has ``r^(-1/2)`` spikes); with ``--faces 20000``

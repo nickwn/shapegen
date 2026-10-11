@@ -429,10 +429,8 @@ def test_face_count_is_predictable_before_tracing(m):
 
 @pytest.mark.parametrize("m", [4, 8, 16])
 def test_cell_for_faces_inverts_the_prediction(m):
-    """The inverse, which is what makes density controllable. Without it the
-    cell comes from whichever rung of ``solve_lattice``'s stock sweep happens
-    to solve: on three FaceScape heads at L=32, identical in every other
-    respect, that was 279, 553 and 8644 faces; asking for 20000 gave 20037,
+    """The inverse, which is what makes density controllable from a face
+    count: asking three FaceScape heads at L=32 for 20000 faces gave 20037,
     20063 and 20043."""
     _P, C, idx = cube_cones()
     assert qg.cell_for_faces(C, idx, 6 * m * m) == pytest.approx(CUBE_EDGE / m,
@@ -475,7 +473,7 @@ def test_negative_cone_traces_and_gives_valence_five():
         assert idx.sum() == pytest.approx(2.0)
 
         chart = qc.project_cones(list(zip(P, idx)), seed=trial)
-        sol = qp.solve_lattice(chart["z"], chart["idx"])
+        sol = qp.solve_lattice(chart["z"], chart["idx"], 0.025)
         if sol["cones"] is None:
             continue
         g = qg.quad_grid(sol["cones"], chart["idx"], sol["cell"],
@@ -542,7 +540,7 @@ def test_sublattice_solve_gives_a_pure_quad_mesh():
     price and the reason it is not the default."""
     C0 = load_ref("cones_plane")
     idx = load_ref("cone_idx")
-    sol = qp.solve_lattice(C0, idx, sublattice="(1+i)Z[i]")
+    sol = qp.solve_lattice(C0, idx, 0.025, sublattice="(1+i)Z[i]")
     assert sol["cones"] is not None
     assert sol["cell"] < float(load_ref("cell")[0])
 
@@ -605,7 +603,7 @@ def test_end_to_end_from_the_ginzburg_landau_cones():
     assert sum(k for _p, k in cones) == pytest.approx(2.0, abs=1e-9)
 
     chart = qc.project_cones(cones)
-    sol = qp.solve_lattice(chart["z"], chart["idx"])
+    sol = qp.solve_lattice(chart["z"], chart["idx"], 0.2)
     assert sol["cones"] is not None
 
     g = qg.quad_grid(sol["cones"], chart["idx"], sol["cell"])
@@ -650,10 +648,9 @@ def test_end_to_end_is_gated_on_quality_and_not_only_on_topology():
     the headline number, per :mod:`shapegen.quad.refine`'s docstring. The two
     agree here to 4% (0.0742 traced against 0.0713 sampled).
 
-    Both runs are traced at a **pinned** cell size (``cell_for_faces(...,
-    4000)``, giving 4810 and 4725 faces), because the stock period sweep
-    otherwise picks a different cell for each cone set and the comparison
-    would be confounded by mesh density.
+    Both runs are traced at the cell ``cell_for_faces(..., 4000)`` asks for
+    (4810 and 4725 faces), so the comparison is not confounded by mesh
+    density.
     """
     from shapegen.geom.encode import n_coeffs
     from shapegen.quad import field as qf
@@ -673,9 +670,7 @@ def test_end_to_end_is_gated_on_quality_and_not_only_on_topology():
         assert sum(k for _p, k in cones) == pytest.approx(2.0, abs=1e-10)
         chart = qc.project_cones(cones)
         tgt = qg.cell_for_faces(chart["z"], chart["idx"], 4000)
-        sol = qp.solve_lattice(chart["z"], chart["idx"],
-                               cell_sizes=tuple(tgt * 0.92 ** k
-                                                for k in range(30)))
+        sol = qp.solve_lattice(chart["z"], chart["idx"], tgt)
         assert sol["cones"] is not None
         g = qg.quad_grid(sol["cones"], chart["idx"], sol["cell"])
         P3, _info = ql.lift_spectral(g.points @ chart["Rm"], rho, L)

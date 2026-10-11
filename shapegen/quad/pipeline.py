@@ -1,6 +1,6 @@
 """ρ̂ → quad mesh in ℝ³, end to end.
 
-    out = quad_mesh(rho_hat, L=32, target_faces=20000)
+    out = quad_mesh(rho_hat, L=32, cell=s)            # or target_faces=20000
     out["P3"], out["faces"]          # vertices in ℝ³, quad (and cone) faces
 
 Stages: the spectral spinor and the exact conformal potential
@@ -21,7 +21,7 @@ from . import grid as qg
 from . import lift as ql
 from . import periods as qp
 
-__all__ = ["solve_field", "cell_ladder", "build_quad_mesh", "quad_mesh"]
+__all__ = ["solve_field", "build_quad_mesh", "quad_mesh"]
 
 
 def solve_field(rho_hat: np.ndarray, L: int, S: int = 4, levels=None):
@@ -42,23 +42,19 @@ def solve_field(rho_hat: np.ndarray, L: int, S: int = 4, levels=None):
     return psi0, psiG, modes, cones0, conesG, spinor
 
 
-def cell_ladder(s_max: float, ratio: float = 0.92, n: int = 30):
-    """Descending cell sizes for :func:`~shapegen.quad.periods.solve_lattice`,
-    which takes the first that solves: "the largest cell no coarser than asked".
-    Smaller cells solve more easily (the cone motion needed scales with the
-    cell). 30 rungs at 0.92 span 8x in cell, ~65x in face count."""
-    return tuple(s_max * ratio ** k for k in range(n))
-
-
 def build_quad_mesh(gl_cones, rho_hat: np.ndarray, L: int, spinor=None,
                     n_samples: int = 4000, seed: int = 0, max_vertices: int = 200000,
-                    sublattice: str = "Z[i]", target_faces: int | None = None) -> dict:
+                    sublattice: str = "Z[i]", cell: float | None = None,
+                    target_faces: int | None = None) -> dict:
     """Cones + ρ̂ → a closed quad mesh in ℝ³ (chart, period solve, trace, lift).
 
-    ``target_faces`` sets the density (otherwise whatever cell the stock sweep
-    solves at -- 279 to 8644 faces on three heads); the result is the coarsest
-    mesh at least that fine. ``sublattice="(1+i)Z[i]"`` puts every cone on a
-    grid vertex (pure quads) at ~4-8x the faces.
+    The density is set by the grid cell size: ``cell`` directly (chart
+    units), or ``target_faces``, converted to the cell that gives about that
+    many faces (:func:`~shapegen.quad.grid.cell_for_faces`). Give exactly one.
+    The period solve runs at that cell only; if it does not solve, ``ok`` is
+    False, and a smaller cell (more faces) is the thing to retry with.
+    ``sublattice="(1+i)Z[i]"`` puts every cone on a grid vertex (pure quads)
+    but needs a smaller cell to solve.
 
     Returns ``ok`` (False if the period solve failed or the trace hit
     ``max_vertices``, with ``reason``), ``chart``, ``solve``, ``grid``
@@ -66,13 +62,14 @@ def build_quad_mesh(gl_cones, rho_hat: np.ndarray, L: int, spinor=None,
     ``faces``, ``P3``, ``lift_info``, ``cones_3d`` and ``aniso`` (per-face
     edge-length ratio).
     """
+    if (cell is None) == (target_faces is None):
+        raise ValueError("give exactly one of cell and target_faces")
     chart = qc.project_cones(gl_cones, n_samples=n_samples, seed=seed)
-    kw = {}
-    if target_faces:
-        kw["cell_sizes"] = cell_ladder(qg.cell_for_faces(chart["z"], chart["idx"], target_faces))
-    solve = qp.solve_lattice(chart["z"], chart["idx"], sublattice=sublattice, **kw)
+    if cell is None:
+        cell = qg.cell_for_faces(chart["z"], chart["idx"], target_faces)
+    solve = qp.solve_lattice(chart["z"], chart["idx"], cell, sublattice=sublattice)
     if solve["cones"] is None:
-        return {"ok": False, "reason": "P5 did not solve at any cell size",
+        return {"ok": False, "reason": f"P5 did not solve at cell {cell:.4g}",
                 "chart": chart, "solve": solve, "cones_3d": None}
     cones_3d = list(zip(qc.chart_to_sphere(solve["cones"], chart["Rm"]), chart["idx"]))
     g = qg.quad_grid(solve["cones"], chart["idx"], solve["cell"], max_vertices=max_vertices)
@@ -86,12 +83,17 @@ def build_quad_mesh(gl_cones, rho_hat: np.ndarray, L: int, spinor=None,
             "cones_3d": cones_3d}
 
 
-def quad_mesh(rho_hat: np.ndarray, L: int, target_faces: int | None = 20000,
-              S: int = 4, levels=None, **kw) -> dict:
+def quad_mesh(rho_hat: np.ndarray, L: int, cell: float | None = None,
+              target_faces: int | None = None, S: int = 4, levels=None,
+              **kw) -> dict:
     """``ρ̂ → quad mesh``: :func:`solve_field` then :func:`build_quad_mesh`.
-    The returned dict also carries ``cones`` (the annealed field's cones) and
+    Density is ``cell`` or ``target_faces`` (20000 if neither is given). The
+    returned dict also carries ``cones`` (the annealed field's cones) and
     ``spinor``."""
+    if cell is None and target_faces is None:
+        target_faces = 20000
     _p0, _pG, _modes, _c0, conesG, spinor = solve_field(rho_hat, L, S, levels)
-    out = build_quad_mesh(conesG, rho_hat, L, spinor=spinor, target_faces=target_faces, **kw)
+    out = build_quad_mesh(conesG, rho_hat, L, spinor=spinor, cell=cell,
+                          target_faces=target_faces, **kw)
     out.update(cones=conesG, spinor=spinor)
     return out

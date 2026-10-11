@@ -669,7 +669,7 @@ def test_area_distortion_matches_the_mesh_the_cones_actually_produce():
     ch = qc.project_cones(cones)
     tgt = qg.cell_for_faces(ch["z"], ch["idx"], 4000)
     sol = qp.solve_lattice(ch["z"], ch["idx"],
-                           cell_sizes=tuple(tgt * 0.92 ** k for k in range(30)))
+                           tgt)
     assert sol["cones"] is not None
     g = qg.quad_grid(sol["cones"], ch["idx"], sol["cell"])
     P3, _info = ql.lift_spectral(g.points @ ch["Rm"], coeffs, L)

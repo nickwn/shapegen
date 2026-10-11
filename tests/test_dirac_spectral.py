@@ -497,7 +497,7 @@ def test_dirac_conditions_worse_on_a_conformal_quad_mesh():
     ch = qc.project_cones(qf.cones_from_field(psiG, S, L, over=4.0))
     tgt = qg.cell_for_faces(ch["z"], ch["idx"], len(Vi))
     sol = qp.solve_lattice(ch["z"], ch["idx"],
-                           cell_sizes=tuple(tgt * 0.92 ** k for k in range(30)))
+                           tgt)
     assert sol["cones"] is not None
     g = qg.quad_grid(sol["cones"], ch["idx"], sol["cell"])
     Q = g.points @ ch["Rm"]

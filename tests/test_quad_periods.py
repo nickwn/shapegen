@@ -130,13 +130,17 @@ def test_node_count_is_bounded_and_responds_to_spread():
 # Gate P5, against the real P0 reference                                      #
 # --------------------------------------------------------------------------- #
 
+def _ref_cell():
+    return float(load_ref("cell").reshape(-1)[0])
+
+
 def test_solve_lattice_reproduces_p0_reference():
     cones_plane = load_ref("cones_plane")
     cone_idx = load_ref("cone_idx")
     cell_ref = float(load_ref("cell").reshape(-1)[0])
     cones_solved_ref = load_ref("cones_solved")
 
-    result = qp.solve_lattice(cones_plane, cone_idx)
+    result = qp.solve_lattice(cones_plane, cone_idx, cell_ref)
     assert result["cell"] == pytest.approx(cell_ref)
     assert np.max(np.abs(result["cones"] - cones_solved_ref)) < 1e-8
 
@@ -146,7 +150,7 @@ def test_gate_p5_period_integrality_including_derived_loops():
     saw directly (dropped by select_independent_loops as redundant)."""
     cones_plane = load_ref("cones_plane")
     cone_idx = load_ref("cone_idx")
-    result = qp.solve_lattice(cones_plane, cone_idx)
+    result = qp.solve_lattice(cones_plane, cone_idx, _ref_cell())
     a = -cone_idx
     tf, _ = qp.periods_and_grad(result["cones"], a, cone_idx, result["loops"], n=48)
     q = tf / result["cell"]
@@ -156,7 +160,7 @@ def test_gate_p5_period_integrality_including_derived_loops():
 def test_gate_p5_cone_motion_within_budget():
     cones_plane = load_ref("cones_plane")
     cone_idx = load_ref("cone_idx")
-    result = qp.solve_lattice(cones_plane, cone_idx)
+    result = qp.solve_lattice(cones_plane, cone_idx, _ref_cell())
     motion = np.abs(result["cones"] - cones_plane).max()
     assert motion <= result["cap"] + 1e-12
 
@@ -168,7 +172,7 @@ def test_gate_p5_4_conegate_passes():
     against the gate's own threshold, not the exact bundle figure."""
     cones_plane = load_ref("cones_plane")
     cone_idx = load_ref("cone_idx")
-    result = qp.solve_lattice(cones_plane, cone_idx)
+    result = qp.solve_lattice(cones_plane, cone_idx, _ref_cell())
     w = qp.conegate(result["cones"], cone_idx, n=40)
     frac = np.abs(2 * w / result["cell"] - np.round(2 * w / result["cell"]))
     assert frac.max() < 1e-6
@@ -195,8 +199,8 @@ def test_solve_lattice_end_to_end_on_gl_cones():
     produces a valid, gate-passing solve on a fresh configuration."""
     cones = _gl_cones()
     chart = qc.project_cones(cones, n_samples=500, seed=0)
-    result = qp.solve_lattice(chart["z"], chart["idx"])
-    assert result["cell"] is not None, f"no cell size solved: {result['sweep']}"
+    result = qp.solve_lattice(chart["z"], chart["idx"], 0.1)
+    assert result["cell"] == 0.1, f"did not solve: predicted {result['predicted']:.3g}, cap {result['cap']:.3g}"
 
     a = -chart["idx"]
     tf, _ = qp.periods_and_grad(result["cones"], a, chart["idx"], result["loops"], n=48)

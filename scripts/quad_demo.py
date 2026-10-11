@@ -28,10 +28,12 @@ Usage::
     python -m scripts.quad_demo --cache reports/faces/rho_ico6.npz -n 4 -L 32
     python -m scripts.quad_demo --synthetic -n 3   # no cache needed
 
-``--faces N`` (default 20000) sets the mesh density; ``--faces 0`` takes the
-period solve's stock sweep, whose face count varies 2-7x across heads with
-the same 8 cones. At 20000, results land within 0.4% of target with Euler
-characteristic 2 and coverage 1.000000.
+``--cell S`` sets the grid cell size (chart units); otherwise ``--faces N``
+(default 20000) is converted to the cell giving about that many faces. The
+period solve runs at that cell only, so a sample can fail to solve ("no
+solve" in the table); retry it with a smaller cell / more faces. At 20000,
+results land within 0.4% of target with Euler characteristic 2 and coverage
+1.000000.
 
 Runtime, one face at L=32 with ``--faces 20000``: spinor solve ~1.4 s (shared
 by the connection and the lift), GL anneal ~4.5 s, trace ~4.4 s, spectral
@@ -445,7 +447,7 @@ def render_quad_mesh(quad_mesh: dict, title_prefix: str, out_path):
 
 
 def render_sample(rho_hat, L, S, levels, title_prefix, out_path,
-                  max_vertices: int = 200000,
+                  max_vertices: int = 200000, cell: float | None = None,
                   target_faces: int | None = None):
     """Run the pipeline on one ``rho_hat`` and save the cross-field figure.
 
@@ -458,7 +460,7 @@ def render_sample(rho_hat, L, S, levels, title_prefix, out_path,
     psi0, psiG, _modes, cones0, conesG, spinor = solve_field(
         rho_hat, L, S, levels)
     quad_mesh = build_quad_mesh(conesG, rho_hat, max_vertices=max_vertices,
-                               target_faces=target_faces,
+                               cell=cell, target_faces=target_faces,
                                spinor=spinor, L=L)
     cones_3d = quad_mesh.get("cones_3d")
     solve = quad_mesh.get("solve")
@@ -556,9 +558,11 @@ def main():
                          "resolution pi/L (default: field.anneal_schedule(), "
                          "i.e. DEFAULT_LEVELS clamped to the epsilon ceiling)")
     ap.add_argument("--faces", type=int, default=20000,
-                    help="target face count; sets the cell size up front "
-                         "instead of taking whatever the period solve's stock "
-                         "sweep happens to land on (0 = stock sweep)")
+                    help="target face count, converted to a cell size "
+                         "(ignored if --cell is given)")
+    ap.add_argument("--cell", type=float, default=None,
+                    help="grid cell size in chart units; the period solve "
+                         "runs at exactly this size")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--out", default="reports/quad_field")
     a = ap.parse_args()
@@ -584,7 +588,9 @@ def main():
         cones0, conesG, quad_mesh = render_sample(rho_hat, a.L, a.S,
                                                   tuple(a.levels) if a.levels
                                                   else None, label, out_path,
-                                                  target_faces=a.faces or None)
+                                                  cell=a.cell,
+                                                  target_faces=None if a.cell
+                                                  else a.faces)
         render_quad_mesh(quad_mesh, label, mesh_path)
 
         solve = quad_mesh.get("solve")

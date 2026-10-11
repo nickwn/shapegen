@@ -310,33 +310,37 @@ def _attempt(cones0, a, idx, loops, sel, t0, cap, s, goal, n_solve: int = 16,
     return C
 
 
-def solve_lattice(cones0: np.ndarray, idx: np.ndarray,
-                  cell_sizes=(0.20, 0.14, 0.10, 0.07, 0.05, 0.035, 0.025,
-                              0.018, 0.012, 0.008),
-                  skip_factor: float = 1.6,
+def solve_lattice(cones0: np.ndarray, idx: np.ndarray, cell: float,
                   sublattice: str = "Z[i]") -> dict:
-    """Find a cell size ``s`` (the largest of ``cell_sizes`` that works) and a
-    perturbation of ``cones0`` within ``0.25 x`` the minimum cone gap such
-    that every loop's period lands on ``ℤ[i]·s``.
+    """Perturb ``cones0`` within ``0.25 x`` the minimum cone gap so that every
+    loop's period lands on ``ℤ[i]·cell``.
+
+    ``cell`` is the grid cell size, in chart units; to ask for a face count
+    instead, use :func:`shapegen.quad.grid.cell_for_faces`. The solve is
+    attempted at exactly this size and either succeeds or reports failure
+    (``cell`` is ``None``): no other size is tried. Smaller cells solve more
+    easily, since the cone motion needed scales with the cell, so on failure
+    retry smaller.
 
     ``sublattice="(1+i)Z[i]"`` asks for the index-2 sublattice instead, which
     puts every cone on a *grid vertex* rather than letting half of them land
-    on cell centres -- a pure quad mesh downstream, at the cost of a smaller
-    cell. See :func:`round_to_lattice` for the arithmetic and the measured
-    price.
+    on cell centres -- a pure quad mesh downstream, but it needs a smaller
+    cell to solve. See :func:`round_to_lattice` for the arithmetic and the
+    measured price.
 
     ``cones0`` are complex chart positions (:func:`~shapegen.quad.cones.project_cones`'s
-    ``z``). Sizes whose linearised predicted motion exceeds ``skip_factor x
-    cap`` are skipped without a Newton attempt.
+    ``z``).
 
-    Returns a dict: ``cell`` (``None`` if nothing in ``cell_sizes`` solved),
-    ``cones`` (the solved positions, or ``None``), ``gap``, ``cap`` (the
-    ``0.25 x gap`` displacement budget), ``loops``, ``sel`` (the independent
-    loop indices), ``sweep`` (per-cell-size diagnostics) and ``n_solve``
-    (the node count from :func:`node_count_for`).
+    Returns a dict: ``cell`` (the requested size, or ``None`` if it did not
+    solve), ``cones`` (the solved positions, or ``None``), ``gap``, ``cap``
+    (the ``0.25 x gap`` displacement budget), ``predicted`` (the linearised
+    cone motion the target needs; above ``cap`` it rarely solves), ``loops``,
+    ``sel`` (the independent loop indices) and ``n_solve`` (the node count
+    from :func:`node_count_for`).
     """
     cones0 = np.asarray(cones0, dtype=complex)
     idx = np.asarray(idx, dtype=float)
+    s = float(cell)
     a = -idx
 
     E = euclidean_mst(cones0)
@@ -351,30 +355,18 @@ def solve_lattice(cones0: np.ndarray, idx: np.ndarray,
     np.fill_diagonal(d, np.inf)
     gap = float(d.min())
     cap = 0.25 * gap
+
+    goal = round_to_lattice(t0 / s, sublattice)
+    r = goal * s - t0
+    real_r = np.concatenate([[x.real, x.imag] for x in r])
     Jp = np.linalg.pinv(realify(G[sel]), rcond=1e-9)
+    predicted = float(np.abs(Jp @ real_r).max())
 
-    def predicted_motion(goal, s):
-        r = goal * s - t0
-        real_r = np.concatenate([[x.real, x.imag] for x in r])
-        return float(np.abs(Jp @ real_r).max())
-
-    sweep = []
-    for s in cell_sizes:
-        goal = round_to_lattice(t0 / s, sublattice)
-        pred = predicted_motion(goal, s)
-        if pred > skip_factor * cap:
-            sweep.append({"s": s, "predicted": pred, "status": "skipped"})
-            continue
-        C = _attempt(cones0, a, idx, loops, sel, t0, cap, s, goal,
-                    n_solve=n_solve, n_check=n_check)
-        sweep.append({"s": s, "predicted": pred,
-                      "status": "solved" if C is not None else "no"})
-        if C is not None:
-            return {"cell": s, "cones": C, "gap": gap, "cap": cap,
-                    "loops": loops, "sel": sel, "sweep": sweep,
-                    "n_solve": n_solve}
-    return {"cell": None, "cones": None, "gap": gap, "cap": cap,
-            "loops": loops, "sel": sel, "sweep": sweep, "n_solve": n_solve}
+    C = _attempt(cones0, a, idx, loops, sel, t0, cap, s, goal,
+                 n_solve=n_solve, n_check=n_check)
+    return {"cell": s if C is not None else None, "cones": C, "gap": gap,
+            "cap": cap, "predicted": predicted, "loops": loops, "sel": sel,
+            "n_solve": n_solve}
 
 
 # --------------------------------------------------------------------------- #

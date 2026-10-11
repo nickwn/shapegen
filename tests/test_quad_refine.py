@@ -234,7 +234,7 @@ def test_refined_cones_still_trace_to_a_closed_quad_mesh():
     assert chart["idx"].sum() == pytest.approx(2.0, abs=1e-10)
     tgt = qg.cell_for_faces(chart["z"], chart["idx"], 6000)
     sol = qp.solve_lattice(chart["z"], chart["idx"],
-                           cell_sizes=tuple(tgt * 0.92 ** k for k in range(30)))
+                           tgt)
     assert sol["cones"] is not None
     g = qg.quad_grid(sol["cones"], chart["idx"], sol["cell"])
     assert g.euler == 2

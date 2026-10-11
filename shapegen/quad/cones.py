@@ -23,16 +23,14 @@ def choose_pole(positions: np.ndarray, n_samples: int = 4000, seed: int = 0):
     discontinuously (179 degrees measured) as the points move slightly; see
     :func:`project_cones`'s ``pole``.
     """
-    rng = np.random.default_rng(seed)
-    best = None
-    for _ in range(n_samples):
-        v = rng.normal(size=3)
-        v /= np.linalg.norm(v)
-        d = min(np.arccos(np.clip(positions @ v, -1.0, 1.0)).min(),
-               np.arccos(np.clip(positions @ (-v), -1.0, 1.0)).min())
-        if best is None or d > best[0]:
-            best = (d, v)
-    return best[1], best[0]
+    from scipy.spatial import cKDTree
+
+    v = np.random.default_rng(seed).normal(size=(n_samples, 3))
+    v /= np.linalg.norm(v, axis=1, keepdims=True)
+    tree = cKDTree(positions)
+    chord = np.minimum(tree.query(v)[0], tree.query(-v)[0])
+    i = int(np.argmax(chord))
+    return v[i], float(2.0 * np.arcsin(min(chord[i] / 2.0, 1.0)))
 
 
 def rotation_to_north(pole: np.ndarray) -> np.ndarray:
@@ -91,7 +89,7 @@ def project_cones(cones, n_samples: int = 4000, seed: int = 0,
     ``min_gap`` (minimum pairwise chart separation — the period solve's cone-motion
     budget is ``0.25 x`` this).
 
-    ``pole`` freezes the chart: :func:`choose_pole` (40 ms, and it hops as
+    ``pole`` freezes the chart: :func:`choose_pole` (it hops as
     cones move) is skipped, making the projection a smooth deterministic
     function of the cones. Anything chart-dependent, and any sweep over cone
     positions, should freeze it. ``pole_dist`` is still reported so a caller
