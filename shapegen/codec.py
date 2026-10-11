@@ -128,11 +128,16 @@ def encode(mesh, L: int, sphere=None, maxiter: int = 300,
       (:func:`shapegen.geom.poly_conformal.encode_polyhedral`). There is no remesh and
       no eigen sphere, so ``sphere`` and ``refine`` do not apply. The code depends
       only on the polyhedron: tessellations of one cube (12 → 12288 triangles,
-      flipped diagonals) agree to ~1e-5 in code spectrum, against 5e-4 – 5e-3 for
-      the remesh path. Takes 0.6–11 s. It suits CAD-like, low-poly and flat-faced
-      inputs. A dense smooth mesh has a cone at every vertex and costs faces ×
-      cones, so use ``"quotient"`` there. Codes use a cone-centroid Möbius gauge,
-      so they are not interchangeable with the other methods'.
+      flipped diagonals) agree to the quadrature error (~1e-6), against
+      5e-4 – 5e-3 for the remesh path. The mesh is used as given (no remesh, no
+      decimation): the start is its discrete uniformization, the fit one
+      Newton–Krylov solve over the edge periods, and the spinor quadrature
+      closed-form. Small and CAD-like meshes take ~0.4–6 s (a 2562-vertex
+      ellipsoid: 6 s). A raw 26k-vertex scan with sliver fans (a capped
+      FaceScape head) converges too, to 1e-11, but takes ~20 min, so prefer
+      ``"quotient"`` (80 ms) for scans in bulk.
+      Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
+      they are not interchangeable with the other methods'.
       ``res.meta["err_surface"]`` scores the decode over the whole surface.
     * ``"direct"``: ``ρ = H·e^u − 1`` measured off the geometry and projected --
       no optimisation, well under a second; what training uses (via

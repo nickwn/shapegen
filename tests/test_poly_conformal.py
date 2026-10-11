@@ -1,6 +1,7 @@
 """The exact polyhedral encoder (:mod:`shapegen.geom.poly_conformal`,
-``codec.encode(method="polyhedral")``): the sphere map is exact, its Jacobian is
-right, and the code depends on the polyhedron, not on its tessellation."""
+``codec.encode(method="polyhedral")``): the start is the discrete uniformization,
+the sphere map is exact, its period Jacobian is exact, and the code depends on
+the polyhedron, not on its tessellation."""
 
 from __future__ import annotations
 
@@ -80,9 +81,22 @@ def hull_poly(seed=3, n=14):
     return P[used], remap[F]
 
 
-def spectrum(rho):
-    Lc = int(round(np.sqrt(len(rho)))) - 1
-    return np.array([np.linalg.norm(rho[l * l:(l + 1) ** 2]) for l in range(1, Lc + 1)])
+def tetrahedron():
+    V = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1.0]])
+    F = np.array([[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]])
+    return V, F
+
+
+def prism(n):
+    """An n-gon prism, each cap fanned from a centre vertex: 2n cones."""
+    th = 2 * np.pi * np.arange(n) / n
+    ring = np.c_[np.cos(th), np.sin(th)]
+    V = np.r_[np.c_[ring, -np.ones(n)], np.c_[ring, np.ones(n)], [[0, 0, -1.0], [0, 0, 1.0]]]
+    F = []
+    for i in range(n):
+        j = (i + 1) % n
+        F += [[i, j, n + j], [i, n + j, n + i], [2 * n, j, i], [2 * n + 1, n + i, n + j]]
+    return V, np.array(F)
 
 
 def test_angle_defects_find_only_the_corners():
@@ -93,43 +107,136 @@ def test_angle_defects_find_only_the_corners():
     assert np.allclose(k[corner], np.pi / 2) and np.allclose(k[~corner], 0, atol=1e-12)
 
 
-def test_jacobian_matches_finite_differences():
-    from scipy.optimize._numdiff import approx_derivative
+def star():
+    """An icosahedron with a pyramid on every face: saddle cones at its vertices. Its
+    uniformization folds two faces, so the solve's length phase must unfold them."""
+    from scipy.spatial import ConvexHull
+
+    p = (1 + 5 ** 0.5) / 2
+    P = np.array([[0, a, b] for a in (-1, 1) for b in (-p, p)] + [[a, b, 0] for a in (-1, 1) for b in (-p, p)]
+                 + [[b, 0, a] for a in (-1, 1) for b in (-p, p)], float)
+    F = ConvexHull(P).simplices
+    out = (np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]]) * P[F].mean(1)).sum(1) < 0
+    F = np.where(out[:, None], F[:, ::-1], F)
+    V, NF = list(P), []
+    for a, b, c in F:
+        V.append(1.6 * (P[a] + P[b] + P[c]) / 3)
+        NF += [[a, b, len(V) - 1], [b, c, len(V) - 1], [c, a, len(V) - 1]]
+    return np.array(V), np.array(NF)
+
+
+def test_uniformize_recovers_an_inscribed_polyhedron():
+    """Discrete uniformization of a polyhedron inscribed in the sphere returns its own
+    vertices up to a Möbius map: all cross-ratios agree."""
+    from scipy.spatial import ConvexHull
+
+    from shapegen.geom.uniformize import uniformize
+
+    rng = np.random.default_rng(0)
+    for n in (8, 50, 400):
+        P = rng.normal(size=(n, 3))
+        P /= np.linalg.norm(P, axis=1, keepdims=True)
+        F = ConvexHull(P).simplices
+        out = (np.cross(P[F[:, 1]] - P[F[:, 0]], P[F[:, 2]] - P[F[:, 0]]) * P[F].mean(1)).sum(1) < 0
+        S = uniformize(2.0 * P, np.where(out[:, None], F[:, ::-1], F))
+        q = rng.choice(n, (500, 4))
+        q = q[np.all(np.diff(np.sort(q, 1), axis=1) > 0, 1)]
+
+        def cr(X):
+            z = (X[:, 0] + 1j * X[:, 1]) / (1 - X[:, 2])
+            a, b, c, d = (z[q[:, k]] for k in range(4))
+            return np.abs((a - c) * (b - d) / ((a - d) * (b - c)))
+
+        assert np.abs(np.log(cr(S) / cr(P))).max() < 1e-9
+
+
+def test_edge_periods_match_face_developments():
+    """Away from the solution the edge periods (FMM, great arcs) equal the faces'
+    developed sides (rays from each face's chart centre), and the Möbius directions
+    leave them unchanged."""
+    from shapegen.geom.conformal import ball_automorphism
+    from shapegen.geom.edge_periods import EdgeSystem
+    from shapegen.geom.uniformize import uniformize
 
     V, F = subdivide_flat(*hull_poly(), 1)
-    pm = pc.PolyMap(V, F)
-    x = np.r_[pm.z.real, pm.z.imag, 0.1] + 0.02 * np.random.default_rng(0).normal(size=2 * len(V) + 1)
-    pm.x0 = x.copy()
-    Jfd = approx_derivative(pm.residual, x, method="3-point")
-    assert np.abs(pm.jacobian(x).toarray() - Jfd).max() < 1e-6 * np.abs(Jfd).max()
+    es = EdgeSystem(V, F)
+    X = uniformize(V, F) + 0.01 * np.random.default_rng(0).normal(size=V.shape)
+    X = es.centre(X / np.linalg.norm(X, axis=1, keepdims=True))
+    I = np.abs(es.periods(X))
+    pm = pc.PolyMap(V, F, S0=X)
+    D = pm.develop(pm.z)
+    for k in range(3):
+        i, j = F[:, k], F[:, (k + 1) % 3]
+        e = np.searchsorted(es.E[:, 0] * len(V) + es.E[:, 1], np.minimum(i, j) * len(V) + np.maximum(i, j))
+        assert np.allclose(np.abs(D[:, (k + 1) % 3] - D[:, k]), I[e], rtol=1e-10)
+    Y = ball_automorphism(X, np.array([0.05, -0.03, 0.02]))
+    assert np.allclose(np.abs(es.periods(Y)) / I, np.mean(np.abs(es.periods(Y)) / I), rtol=1e-10)
+
+
+def test_cone_opposite_a_face():
+    """A regular tetrahedron's vertex sits at the pole of the opposite face's chart."""
+    V = np.array([[1, 1, 1], [1, -1, -1], [-1, 1, -1], [-1, -1, 1.0]])
+    F = np.array([[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]])
+    pm = pc.solve_map(V, F)
+    assert pm.fit["max"] < 1e-12, pm.fit
+
+
+@pytest.mark.parametrize("make", [lambda: hull_poly(seed=0), hull_poly, star,
+                                  lambda: subdivide_flat(*hull_poly(), 2)], ids=["hull0", "hull", "star", "hull_s2"])
+def test_hard_starts_converge(make):
+    """Spiky hulls (the face solver stalled on hull0) and a start with folded faces
+    (star) reach round-off, and the face development agrees."""
+    V, F = make()
+    pm = pc.solve_map(V, F)
+    assert pm.fit["max"] < 1e-10, pm.fit
+    assert np.abs(pm.residual(np.r_[pm.z.real, pm.z.imag, pm.logc])).max() < 1e-10
+
+
+def test_prism_encodes_deterministically():
+    """Fanned caps make the sample density jump across edges, which disconnected the
+    sign-alignment graph. The rotation gauge makes repeat encodes identical."""
+    V, F = prism(12)
+    a, b = (pc.encode_polyhedral(V, F, L)["coeffs"] for _ in range(2))
+    assert np.allclose(a, b, atol=1e-12)
 
 
 @pytest.mark.parametrize("mesh", ["cube", "box", "hull", "hull_sub2"])
 def test_sphere_map_is_exact(mesh):
-    """Every face's developed triangle is congruent to its 3D triangle, and the
-    quadrature samples carry the exact surface area and cover the sphere."""
+    """Every face's developed triangle is congruent to its 3D triangle; the
+    closed-form spinor of the code's quadrature is :meth:`spinor_at`'s, with one
+    sign over the whole sphere (the jump rule holds on every edge); the quadrature
+    has converged."""
+    from shapegen.geom import dirac_spectral as ds
+
     V, F = {"cube": lambda: cube_mesh(1), "box": lambda: cube_mesh(1, dims=(1, 2, 3)),
             "hull": hull_poly, "hull_sub2": lambda: subdivide_flat(*hull_poly(), 2)}[mesh]()
     pm = pc.solve_map(V, F)
-    assert pm.fit["max"] < 1e-7, pm.fit
+    assert pm.fit["max"] < 1e-10 and pm.fit["u_spread"] < 1e-9, pm.fit
+    assert np.abs(pm.residual(np.r_[pm.z.real, pm.z.imag, pm.logc])).max() < 1e-10
     pm.gauge_cones()
-    xs, wA, Xs = pm.surface_samples(6000)
-    area = 0.5 * np.linalg.norm(np.cross(V[F[:, 1]] - V[F[:, 0]], V[F[:, 2]] - V[F[:, 0]]), axis=1).sum()
-    assert pm.inv_fail <= 3 and np.isclose(wA.sum(), area, rtol=1e-3)
-    _, s2 = pm.spinor_at(xs, pm.sample_faces)
-    assert np.isclose((wA / s2).sum(), 4 * np.pi, rtol=1e-3)                 # sphere area
+    Ls = ds.spinor_band(L, ds.potential_band_extra(L))
+    x, w, lam, f = pm.sphere_quadrature(Ls)
+    assert pm.sign_defects == 0 and pm.jump_err < 1e-10
+    ref, _ = pm.spinor_at(x, f)
+    assert np.allclose(np.abs(np.einsum("ij,ij->i", lam, ref) / np.einsum("ij,ij->i", ref, ref)), 1, atol=1e-10)
+    x2, w2, lam2, _ = pm.sphere_quadrature(Ls, qmin=4)
+    moments = lambda x_, w_, l_: (w_[:, None] * l_).T @ np.c_[np.ones(len(x_)), x_]   # noqa: E731
+    m1, m2 = moments(x, w, lam), moments(x2, w2, lam2)
+    assert np.abs(m1 - m2).max() < 1e-5 * np.abs(m2).max()
 
 
 def test_code_is_tessellation_invariant():
     """Same polyhedron, different triangles (coarse, flipped diagonals, flat-subdivided):
-    the codes agree to ~1e-5 in rotation-invariant spectrum."""
-    ref = spectrum(pc.encode_polyhedral(*cube_mesh(1), L)["coeffs"])
+    the codes themselves agree (the rotation is fixed by the cones), to the
+    quadrature's error (measured: cube 5e-7, hull 1.6e-6; small faces next to
+    strong cones held this at 1.3e-4 before the cone term in the order rule)."""
+    ref = pc.encode_polyhedral(*cube_mesh(1), L)["coeffs"]
     for V, F in (cube_mesh(4, flip=True), subdivide_flat(*cube_mesh(1), 2)):
-        s = spectrum(pc.encode_polyhedral(V, F, L)["coeffs"])
-        assert np.linalg.norm(s - ref) < 1e-4 * np.linalg.norm(ref)
-    ref = spectrum(pc.encode_polyhedral(*hull_poly(), L)["coeffs"])
-    s = spectrum(pc.encode_polyhedral(*subdivide_flat(*hull_poly(), 2), L)["coeffs"])
-    assert np.linalg.norm(s - ref) < 1e-4 * np.linalg.norm(ref)
+        c = pc.encode_polyhedral(V, F, L)["coeffs"]
+        assert np.linalg.norm(c - ref) < 5e-6 * np.linalg.norm(ref)
+    ref = pc.encode_polyhedral(*hull_poly(), L)["coeffs"]
+    c = pc.encode_polyhedral(*subdivide_flat(*hull_poly(), 2), L)["coeffs"]
+    assert np.linalg.norm(c - ref) < 1e-5 * np.linalg.norm(ref)
 
 
 def test_codec_polyhedral_method():
@@ -142,3 +249,35 @@ def test_codec_polyhedral_method():
     assert r.meta["err_surface"] < 1.05 * remesh.meta["err_surface"], (r.meta["err_surface"], remesh.meta["err_surface"])
     with pytest.raises(ValueError):
         codec.encode(mesh, L, sphere=r.sphere, method="polyhedral")
+
+
+def test_edge_system_short_arcs_and_strain_steps():
+    """Short great arcs keep their digits (an ``arccos`` angle lost half of them: 4e-8
+    relative at 5e-5), so the strain-scaled differences of ``J·v`` are linear."""
+    from shapegen.geom.edge_periods import _slerp
+
+    rng = np.random.default_rng(0)
+    A = rng.normal(size=(50, 3))
+    A /= np.linalg.norm(A, axis=1, keepdims=True)
+    T = np.cross(A, rng.normal(size=(50, 3)))
+    T /= np.linalg.norm(T, axis=1, keepdims=True)
+    for beta in (5e-5, 1e-7):
+        B = A * np.cos(beta) + T * np.sin(beta)
+        x, dx = _slerp(A, B, np.ones((50, 1)))
+        assert np.abs(np.linalg.norm(dx[:, 0], axis=1) / beta - 1).max() < 3e-15 / beta   # arccos: 1e-16 / beta²
+        assert np.abs(x[:, 0] - B).max() < 1e-15
+
+
+def test_near_flat_face_rows_are_flipped():
+    """A face with a 3D angle near 180° gets its rows from an intrinsic flip (the
+    metric unchanged), and the map still converges to a true root (equal scales)."""
+    from shapegen.geom.edge_periods import EdgeSystem
+
+    V, F = tetrahedron()
+    m = 0.5 * (V[0] + V[1]) + 0.004 * (V[2] - 0.5 * (V[0] + V[1]))
+    V = np.r_[V, [m]]
+    F = np.r_[F[1:], [[0, 1, 4], [1, 2, 4], [2, 0, 4]]]
+    es = EdgeSystem(V, F)
+    assert (np.sort(es.F, 1) != np.sort(F, 1)).any(1).sum() == 2
+    pm = pc.solve_map(V, F)
+    assert pm.fit["max"] < 1e-10 and pm.fit["u_spread"] < 1e-9, pm.fit
