@@ -193,10 +193,27 @@ CG_MAX = 10        # Newton steps after the first: CG preconditioned by the last
 CG_TOL = 1e-3
 
 
+class _Permuted:
+    """``solve`` of a factorisation of ``H[p][:, p]``, in ``H``'s numbering."""
+
+    def __init__(self, lu, p):
+        self.lu, self.p = lu, p
+
+    def solve(self, b):
+        x = np.empty_like(b)
+        x[self.p] = self.lu.solve(b[self.p])
+        return x
+
+
 def _spd_factor(H):
     """LU of the sparse symmetric (positive definite) ``H``: a symmetric fill-reducing
-    order and diagonal pivots, ~15 % faster than :func:`~scipy.sparse.linalg.splu`'s default."""
-    return spla.splu(H, permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0, options=dict(SymmetricMode=True))
+    order and diagonal pivots, ~15 % faster than :func:`~scipy.sparse.linalg.splu`'s default.
+    The rows are relabelled by a fixed random permutation first: SuperLU's minimum
+    degree ordering is pathologically slow on some numberings (an icosphere-6 mesh's
+    graph Laplacian: 25 s in the ordering, 0.22 s relabelled, the same fill)."""
+    p = np.random.default_rng(0).permutation(H.shape[0])
+    return _Permuted(spla.splu(H[p][:, p].tocsc(), permc_spec="MMD_AT_PLUS_A", diag_pivot_thresh=0.0,
+                               options=dict(SymmetricMode=True)), p)
 
 
 def _cot_laplacian(tri, ang, n, free=None):

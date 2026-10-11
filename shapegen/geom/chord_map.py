@@ -49,7 +49,13 @@ region 0.0260, surface 0.0688; the exact map's encode 0.0684 / 0.0250 / 0.0688.
 ~3.9 s end to end through the codec, single-threaded (also with BLAS on one
 thread): uniformization (with the row setup) 0.8 s, chord solve 0.95 s (two LUs
 of the 79k-unknown system, 0.43 s each), periods 0.6 s, correction 0.17 s,
-gauge, quadrature and code 1.0 s, scoring 0.2 s. Smooth 2562-vertex ellipsoid:
+gauge, quadrature and code 1.0 s, scoring 0.2 s (COLAMD LUs; not re-timed since
+the nested-dissection order). Smoothed icosphere-6 heads (``rho_ico6``, 40962
+vertices): 6–7 s per encode at L = 16 and 32 — uniformization 1.0 s, chord solve
+3.6 s (two LUs of the 123k-unknown system, 1.8 s each by :func:`_dissection_columns`;
+3.7 s each under COLAMD), periods 0.7 s, code 0.4 s (L=16) / 1.0 s (L=32). They
+took ~62 s before uniformize's minimum-degree ordering was relabelled (53 s of it
+in SuperLU's ordering on the icosphere numbering). Smooth 2562-vertex ellipsoid:
 surface error 9.8e-5 vs 7.8e-5 exact (L=16: 2.32e-4 vs 2.24e-4), 0.9 s vs 10 s;
 codes agree to 0.2–0.7% on smooth or finely tessellated meshes (also a cube
 tessellated 12×12 per side). A 9-vertex hull flat-subdivided to 1800 vertices:
@@ -247,6 +253,52 @@ def _jacobian(es, X):
     return sp.vstack([es._chord_jacobian(X), sp.csr_matrix(es._gauge(X).T)]).tocsc()
 
 
+def _dissection_columns(V, E, n, leaf: int = 64):
+    """A fill-reducing column order of the chord Jacobian: geometric nested dissection
+    of the vertices (halve along the longest axis of their 3D extent, the halves'
+    separator — the first half's vertices joined to the second — last), each vertex's
+    three columns (two tangent, ``u``) kept together. On an icosphere-6 head (123k
+    unknowns) SuperLU factors it in 1.9 s against 3.9 s under COLAMD (fill 20M vs
+    24M entries)."""
+    A = sp.coo_matrix((np.ones(2 * len(E)), (np.r_[E[:, 0], E[:, 1]], np.r_[E[:, 1], E[:, 0]])),
+                      shape=(n, n)).tocsr()
+    order, stack = [], [(np.arange(n), 0)]
+    # iterative post-order: a part is (vertices, 0) to split, or (separator, 1) to emit
+    while stack:
+        idx, done = stack.pop()
+        if done or len(idx) <= leaf:
+            order.append(idx)
+            continue
+        Q = V[idx]
+        ax = np.argmax(Q.max(0) - Q.min(0))
+        side = np.full(n, -1)
+        side[idx] = (Q[:, ax] > np.median(Q[:, ax])).astype(int)
+        sub = A[idx]
+        r = np.repeat(idx, np.diff(sub.indptr))
+        sep = np.unique(r[(side[r] == 0) & (side[sub.indices] == 1)])
+        side[sep] = 2
+        lo, hi = idx[side[idx] == 0], idx[side[idx] == 1]
+        if not len(lo) or not len(hi):
+            order.append(idx)
+            continue
+        stack += [(sep, 1), (hi, 0), (lo, 0)]                       # popped: lo, hi, then sep
+    pv = np.concatenate(order)
+    return np.stack([pv, n + pv, 2 * n + pv], 1).ravel()
+
+
+class _ColumnLU:
+    """``solve`` of an LU of ``A[:, cols]``, in ``A``'s unknowns."""
+
+    def __init__(self, lu, cols):
+        self.lu, self.cols = lu, cols
+
+    def solve(self, b):
+        y = self.lu.solve(b)
+        x = np.empty_like(y)
+        x[self.cols] = y
+        return x
+
+
 def chord_map(V, F, log=None):
     """Sphere positions ``(n, 3)`` of the vertices of the closed genus-0 polyhedron
     ``(V, F)`` (module docstring, steps 1–2), and an info dict (stage times, the
@@ -295,8 +347,10 @@ def chord_map(V, F, log=None):
             log(f"   rows rms {np.sqrt(np.mean(r1 ** 2)):.2e} max {np.abs(r1).max():.1e} (step {s:g})")
         return X1, u1
 
+    cols = _dissection_columns(es.V, es.E, es.n)
+
     def factor(X):
-        return spla.splu(_jacobian(es, X), permc_spec="COLAMD")
+        return _ColumnLU(spla.splu(_jacobian(es, X)[:, cols].tocsc(), permc_spec="NATURAL"), cols)
 
     # Two chord steps (each by its own LU), one corrected step by GMRES on the second LU (the
     # corrected rows have the same Jacobian, and X moved little since it was factored).

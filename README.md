@@ -90,7 +90,7 @@ are accuracy / speed trade-offs over the same inverse problem:
 | method | what it is | rel. error, heads, L=32 | time |
 |---|---|---|---|
 | `quotient` | the Dirac equation read pointwise off the target's spinor, corrected onto the decoder's | ~0.0077 | ~0.1 s (+0.65 s closing and scoring) |
-| `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan | 0.1–10 s; ~4 s per head |
+| `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan | 0.1–10 s; ~4 s per raw head, 6–7 s per 41k-vertex icosphere head |
 
 Error is Procrustes-aligned (rotation/translation/scale removed), relative to
 shape size.

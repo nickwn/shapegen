@@ -116,7 +116,7 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
       edge periods, and a piecewise-Möbius spinor. A raw 26k-vertex FaceScape
       head encodes in ~4 s (the exact map: ~20 min) and decodes as well
       (L=32: vertex error 0.0684 and surface 0.0688 for both; face region
-      0.0260 vs 0.0250).
+      0.0260 vs 0.0250); a smoothed 40962-vertex icosphere-6 head in 6–7 s.
       ``res.meta["solver"]`` says which ran.
       Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
       they are not interchangeable with the other methods'.
