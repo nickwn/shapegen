@@ -42,7 +42,11 @@ well as the exact one.
    ``n ≥ Ls · side``, a node at each centroid weighted by its spherical area. One
    node per face cost 2× in decode error: a few hundred large faces (sides to 0.3
    rad) carry the high bands. ``n ≥ Ls · side / 4`` was enough on the head but
-   cost 25% on the ellipsoid at L=16.
+   cost 25% on the ellipsoid at L=16. The sides are great arcs, not the faces'
+   true (curved) edges; :func:`lune_nodes` moves them to the mean of the two
+   faces' Möbius circles, to first order (the arcs cost 19–24 % on 162- and
+   642-vertex smooth meshes at L=16; +0.3 s / +0.45 s on a 41k-vertex head at
+   L = 16 / 32, which it leaves unchanged).
 
 **Measured** at L=32. FaceScape head (26k vertices): vertex error 0.0684, face
 region 0.0260, surface 0.0688; the exact map's encode 0.0684 / 0.0250 / 0.0688.
@@ -51,9 +55,10 @@ thread): uniformization (with the row setup) 0.8 s, chord solve 0.95 s (two LUs
 of the 79k-unknown system, 0.43 s each), periods 0.6 s, correction 0.17 s,
 gauge, quadrature and code 1.0 s, scoring 0.2 s (COLAMD LUs; not re-timed since
 the nested-dissection order). Smoothed icosphere-6 heads (``rho_ico6``, 40962
-vertices): 6–7 s per encode at L = 16 and 32 — uniformization 1.0 s, chord solve
+vertices): 7–8 s per encode at L = 16 and 32 — uniformization 1.0 s, chord solve
 3.6 s (two LUs of the 123k-unknown system, 1.8 s each by :func:`_dissection_columns`;
-3.7 s each under COLAMD), periods 0.7 s, code 0.4 s (L=16) / 1.0 s (L=32). They
+3.7 s each under COLAMD), periods 0.7 s, code 0.7 s (L=16) / 1.4 s (L=32), check
+points 0.7 s (:func:`surface_samples`). They
 took ~62 s before uniformize's minimum-degree ordering was relabelled (53 s of it
 in SuperLU's ordering on the icosphere numbering). Smooth 2562-vertex ellipsoid:
 surface error 9.8e-5 vs 7.8e-5 exact (L=16: 2.32e-4 vs 2.24e-4), 0.9 s vs 10 s;
@@ -61,10 +66,13 @@ codes agree to 0.2–0.7% on smooth or finely tessellated meshes (also a cube
 tessellated 12×12 per side). A 9-vertex hull flat-subdivided to 1800 vertices:
 3.23e-2 vs 3.17e-2.
 
-Coarse polyhedra are the exact path's (``EXACT_MAX_VERTICES``): a face is then a
-large part of the sphere and its λ is singular at the corners
-(``|ζ − p|^{a/2}``), which a Möbius map is not (a cube, a box, a 9-vertex hull,
-a 12-gon prism: 3–12× the exact surface error at L=16).
+Coarse polyhedra are the exact path's (``EXACT_MAX_VERTICES``). Scored on the
+exact path's true surface points at L=16, this path is now within −5 … +11 % of
+it on a cube, a demo bottle (162 / 642 vertices) and an ellipsoid (162 / 642;
+the +11 % is the map's local periods). (The "3–12×" once measured on a cube was
+mostly the Möbius check points.) Its code still depends on the tessellation: a
+cube's 12-, 192- (flipped) and flat-subdivided triangulations differ by 9e-2
+(the exact path: 5e-6), since the Möbius spinor is per face.
 """
 
 from __future__ import annotations
@@ -464,6 +472,78 @@ def sphere_nodes(X, F, Ls: float, per: float = 1.0):
 
 
 # ------------------------------------------------------------------ the code
+def lune_nodes(mf, X, F, Ls: float, nmax: int = 8):
+    """Nodes ``(x, w, (f0, f1))`` that move :func:`sphere_nodes`' great-arc sides to
+    the faces' curved sides, to first order: per edge the strip between the arc and
+    the curve, one node per arc point at the curve's half offset with weight
+    ``offset × arc length``, which ``f1`` gains and ``f0`` loses (one node carries
+    both: its value is ``w (λ_f1 − λ_f0)``; offsets are positive into ``f0``). The curve is the mean of the two faces' Möbius circles through the
+    edge (:class:`MobiusFaces` maps the 3D edge to a circle; the two differ when
+    the faces are not discretely conformal), so it is shared and the nodes tile.
+    ``n = ⌈Ls · arc⌉`` Gauss points per edge, in ``[1, nmax]``; one is the midpoint
+    with the weight of a parabolic offset (most edges of a dense mesh).
+
+    Measured with the exact map and spinor signs at L=16: the great-arc sides cost
+    +24 % (bottle, 162 vertices), +22 % (ellipsoid, 162) and +19 % (642) against
+    the exact curved-patch quadrature; with the lunes they are within 2 %. On a
+    cube the two circles are mirror images, the mean is the arc (its true edges
+    are great arcs, by symmetry), and the nodes have zero weight."""
+    n = len(X)
+    m = len(F)
+    fe, ke = np.repeat(np.arange(m), 3), np.tile(np.arange(3), m)
+    i_, j_ = F[fe, ke], F[fe, (ke + 1) % 3]
+    o = np.argsort(np.minimum(i_, j_) * n + np.maximum(i_, j_), kind="stable")
+    f0, f1 = fe[o][0::2], fe[o][1::2]
+    k0, k1 = ke[o][0::2], ke[o][1::2]
+    A, B = X[F[f0, k0]], X[F[f0, (k0 + 1) % 3]]                    # f0 runs A → B, f1 runs B → A
+    om = np.arctan2(np.linalg.norm(np.cross(A, B), axis=1), np.einsum("ij,ij->i", A, B))
+    nab = pc._normalize(np.cross(A, B))                            # the arc's left normal (f0's side)
+    # each face's circle through A, B and the preimage of its 3D side's midpoint: plane n_c·x = h
+    p = mf.V[F]
+    d_ = p - p[:, :1]
+    wc = np.einsum("fki,fi->fk", d_, mf.e1) + 1j * np.einsum("fki,fi->fk", d_, mf.e2)
+
+    def circle(f, k):
+        wm = 0.5 * (wc[f, k] + wc[f, (k + 1) % 3])
+        M = mf.M[f]
+        zm = (M[:, 1, 1] * wm - M[:, 0, 1]) / (M[:, 0, 0] - M[:, 1, 0] * wm)
+        C = np.einsum("fji,fj->fi", mf.Rf[f], pc._unstereo(zm))
+        nc = pc._normalize(np.cross(B - A, C - A))
+        return nc, np.einsum("ij,ij->i", nc, A)
+
+    nc0, h0 = circle(f0, k0)
+    nc1, h1 = circle(f1, k1)
+    nl = np.clip(np.ceil(Ls * om).astype(int), 1, nmax)
+    xs, ws, fs = [], [], []
+    for q in np.unique(nl):
+        e = np.flatnonzero(nl == q)
+        if q == 1:                     # the midpoint, weighted for a parabolic offset: ∫ d = ⅔ d(½)
+            s, wg = np.array([0.5]), np.array([4.0 / 3.0])
+        else:
+            xg, wg = np.polynomial.legendre.leggauss(q)
+            s = (xg + 1) / 2
+        so = np.sin(om[e])[:, None]
+        P = (np.sin((1 - s) * om[e, None])[..., None] * A[e, None] + np.sin(s * om[e, None])[..., None] * B[e, None]) / so[..., None]
+        off = []
+        for nc, h in ((nc0[e], h0[e]), (nc1[e], h1[e])):
+            # the circle's point on the great circle through P normal to the arc: cos d (n·P) + sin d (n·nab) = h
+            p1 = np.einsum("rki,ri->rk", P, nc)
+            p2 = np.einsum("ri,ri->r", nab[e], nc)[:, None]
+            R_ = np.hypot(p1, p2)
+            phi = np.arctan2(p2, p1)
+            ac = np.arccos(np.clip(h[:, None] / R_, -1, 1))
+            dp, dm = phi + ac, phi - ac
+            dd = np.where(np.abs(dp) < np.abs(dm), dp, dm)
+            off.append((dd + np.pi) % (2 * np.pi) - np.pi)
+        d = 0.5 * (off[0] + off[1])
+        x = pc._normalize(np.cos(d / 2)[..., None] * P + np.sin(d / 2)[..., None] * nab[e, None])
+        wl = (d * om[e, None] * (wg / 2)).ravel()
+        xs.append(x.reshape(-1, 3))
+        ws.append(wl)
+        fs.append(np.c_[np.repeat(f0[e], q), np.repeat(f1[e], q)])
+    return np.concatenate(xs), np.concatenate(ws), np.concatenate(fs)
+
+
 def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: float | None = None,
                  n_check: int = 6000) -> dict:
     """Polyhedron ``(V, F)`` → closed ρ̂ at band ``L`` (module docstring). Returns the
@@ -485,13 +565,18 @@ def encode_chord(V, F, L: int, iters: int = 3, over: int = 3, lift=None, Ls: flo
     Lm = L + 0.5
     mf = MobiusFaces(X, V, F)
     xs, w, fo = sphere_nodes(X, F, Ls)
+    xl, wl, fl = lune_nodes(mf, X, F, Ls)
     lc = align_signs(mf.spinor(pc._normalize(X[F].mean(1)), np.arange(len(F))), F)
-    th, ph = np.arccos(np.clip(xs[:, 2], -1, 1)), np.arctan2(xs[:, 1], xs[:, 0])
 
-    lam = mf.spinor(xs, fo)
-    lam *= np.where(np.einsum("ij,ij->i", lam, lc[fo]) < 0, -1.0, 1.0)[:, None]
-    raw = qmul(qconj(frame_quaternion(th, ph)), lam)
-    v = _project_faces(Lm, th, ph, w * (raw[:, 0] + 1j * raw[:, 1]), w * (raw[:, 2] - 1j * raw[:, 3]))
+    def spinor(x, f):
+        lam = mf.spinor(x, f)
+        return lam * np.where(np.einsum("ij,ij->i", lam, lc[f]) < 0, -1.0, 1.0)[:, None]
+
+    wlam = np.r_[w[:, None] * spinor(xs, fo), wl[:, None] * (spinor(xl, fl[:, 1]) - spinor(xl, fl[:, 0]))]
+    xs = np.r_[xs, xl]
+    th, ph = np.arccos(np.clip(xs[:, 2], -1, 1)), np.arctan2(xs[:, 1], xs[:, 0])
+    raw = qmul(qconj(frame_quaternion(th, ph)), wlam)
+    v = _project_faces(Lm, th, ph, raw[:, 0] + 1j * raw[:, 1], raw[:, 2] - 1j * raw[:, 3])
     rho = rho_quotient(v, L, Ls, Lm, iters=iters, over=over)
     n, k = len(ds.sw.half_modes(0.5, Ls)), len(v) // 2
     rho, res, gamma = close_code(rho, L, Ls, v0=np.r_[v[:k], np.zeros(n - k), v[k:], np.zeros(n - k)])
