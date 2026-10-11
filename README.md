@@ -90,7 +90,7 @@ are accuracy / speed trade-offs over the same inverse problem:
 | method | what it is | rel. error, heads, L=32 | time |
 |---|---|---|---|
 | `quotient` | the Dirac equation read pointwise off the target's spinor, corrected onto the decoder's | ~0.0077 | ~0.1 s (+0.65 s closing and scoring) |
-| `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan (not comparable with the rows above) | 0.1–10 s; ~4 s per head |
+| `polyhedral` (default) | the mesh read as a polyhedron: exact map ≤ 3000 vertices, fast map above | 0.068 on a raw, unsmoothed 26k-vertex scan | 0.1–10 s; ~4 s per head |
 
 Error is Procrustes-aligned (rotation/translation/scale removed), relative to
 shape size.
@@ -109,10 +109,6 @@ codec.shape_error(mesh.vertices, X)
   valid) codes for the same shape, so the code is not unique. Encode train and
   test data with the same method, or you have a distribution shift you built
   yourself.
-- **The sphere is a coordinate frame.** Codes are only comparable if every
-  shape is encoded against the same sphere parameterisation
-  (`codec.encode_dataset(..., sphere=template)`). At sample time there is no
-  input mesh, so this has to be fixed up front.
 - **Rate–distortion.** As pure compression, a simplified mesh beats ρ̂ above
   ~1000 floats. The case for ρ̂ is the properties table above, not bits.
 - **Scans are noisy, and curvature amplifies noise** (it's a second
@@ -132,14 +128,6 @@ interpolation paths), sample with 20–50 Euler steps, decode.
 - `gaussian_baseline`: fit a Gaussian to the codes and sample it, as the
   baseline the flow has to beat.
 
-The representation sits behind a `basis` interface (`fit / encode / decode`
-on whitened codes), so the model never sees geometry:
-
-| basis | needs registration | notes |
-|---|---|---|
-| `RhoBasis` | no | the codec above |
-| `PCABasis` | yes | the 3DMM-style baseline; 0.0082 held-out at k=32 on 200 heads |
-
 ```python
 from shapegen.models.basis import RhoBasis
 from shapegen.models.flow import train_flow, sample_flow
@@ -157,38 +145,13 @@ quality.
 
 ![Heads sampled from the flow](docs/img/samples.png)
 
-*Codes sampled from a rectified flow trained on 360 heads at L=24 (an earlier
-run on the since-removed `direct` codes, from `reports/faces/faces_flow_rho.npz`), then decoded. No input mesh is involved.*
+*Codes sampled from a rectified flow trained on 360 heads at L=24, then decoded. No input mesh is involved.*
 
 ### Status
 
 `scripts/train_faces.py` runs end to end on smoothed face scans with both
 bases. Sample-quality numbers against the Gaussian and PCA baselines are not
 yet recorded here.
-
-### What we've measured
-
-- **Sample quality is bounded by N / d_eff, not by compute.** Sample
-  dispersion (max |std − 1| in whitened space, target 0) on 340 heads:
-  0.018 at 85 samples/dim, 0.164 at 21, 0.229 at 11, 0.329 at 5.3. Tripling
-  training steps: 0.329 → 0.256. 50 → 1000 Euler steps: 0.329 → 0.298. Aim
-  for N / d_eff ≥ 20.
-- **Nominal K overstates the dimension.** Heads occupy a low-dimensional
-  submanifold of ℝ^1089, so the target is near-singular. `train_faces.py`
-  reports the participation ratio; size the model to that, not to K.
-- **Whitening is preconditioning, not cosmetics.** With an unweighted MSE,
-  unwhitened codes mean the model fits the high-variance coordinates and
-  ignores the rest.
-- **Sanity-check the latent before training.** Sample the Gaussian baseline
-  and decode. If those shapes are broken, the latent isn't safe to sample from
-  and model quality won't fix it. Totality guarantees a surface, not a
-  plausible one.
-- **Canonicalise pose.** Against a shared sphere, a random rotation moves a
-  head's code by ~7% at L=32 (subjects differ by ~31%), so unaligned pose is
-  learned as if it were shape variation. `faces.build_dataset` Procrustes-aligns
-  by default.
-
----
 
 ## 3 · Mesh generation
 
