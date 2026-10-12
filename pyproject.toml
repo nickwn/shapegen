@@ -14,6 +14,7 @@ dependencies = [
     "matplotlib",   # scripts/plot_sh_roundtrip.py -- was used but undeclared
     "torch",        # shapegen/models/ -- core since the flow model landed
     "pymeshlab",    # isotropic remesh before cMCF; worth 25-32% of reconstruction
+    "pymetis",      # METIS nested dissection: the polyhedral encoder's LU column order
 ]
 
 [project.optional-dependencies]

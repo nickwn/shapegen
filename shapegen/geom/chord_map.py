@@ -76,12 +76,13 @@ region 0.0260, surface 0.0688; the exact map's encode 0.0684 / 0.0250 / 0.0688.
 ~3.9 s end to end through the codec, single-threaded (also with BLAS on one
 thread): uniformization (with the row setup) 0.8 s, chord solve 0.95 s (two LUs
 of the 79k-unknown system, 0.43 s each), periods 0.6 s, correction 0.17 s,
-gauge, quadrature and code 1.0 s, scoring 0.2 s (COLAMD LUs; not re-timed since
-the nested-dissection order). Smoothed icosphere-6 heads (``rho_ico6``, 40962
-vertices): 7–8 s per encode at L = 16 and 32 — uniformization 1.0 s, chord solve
-3.6 s (two LUs of the 123k-unknown system, 1.8 s each by :func:`_dissection_columns`;
-3.7 s each under COLAMD), periods 0.7 s, code 0.7 s (L=16) / 1.4 s (L=32), check
-points 0.7 s (:func:`surface_samples`). They
+gauge, quadrature and code 1.0 s, scoring 0.2 s (before step 0, the curved-edge
+correction and the check points). Now, with the LUs in :func:`_metis_columns`'s
+order: raw 26k-vertex scans (3 heads) 4.1–4.9 s at L=16, 5.1–6.1 s at L=32 (chord
+solve 0.7–1.3 s); smoothed icosphere-6 heads (``rho_ico6``, 40962 vertices) 6.8 s /
+7.6–7.7 s — uniformization 1.0 s, chord solve 2.9–3.0 s (3.6 s with a geometric
+dissection, 7.4 s under COLAMD), periods 0.7 s, code 0.7 s (L=16) / 1.4 s (L=32),
+check points 0.7 s (:func:`surface_samples`). They
 took ~62 s before uniformize's minimum-degree ordering was relabelled (53 s of it
 in SuperLU's ordering on the icosphere numbering).
 
@@ -286,36 +287,36 @@ def _jacobian(es, X):
     return sp.vstack([es._chord_jacobian(X), sp.csr_matrix(es._gauge(X).T)]).tocsc()
 
 
-def _dissection_columns(V, E, n, leaf: int = 64):
-    """A fill-reducing column order of the chord Jacobian: geometric nested dissection
-    of the vertices (halve along the longest axis of their 3D extent, the halves'
-    separator — the first half's vertices joined to the second — last), each vertex's
-    three columns (two tangent, ``u``) kept together. On an icosphere-6 head (123k
-    unknowns) SuperLU factors it in 1.9 s against 3.9 s under COLAMD (fill 20M vs
-    24M entries)."""
-    A = sp.coo_matrix((np.ones(2 * len(E)), (np.r_[E[:, 0], E[:, 1]], np.r_[E[:, 1], E[:, 0]])),
-                      shape=(n, n)).tocsr()
-    order, stack = [], [(np.arange(n), 0)]
-    # iterative post-order: a part is (vertices, 0) to split, or (separator, 1) to emit
-    while stack:
-        idx, done = stack.pop()
-        if done or len(idx) <= leaf:
-            order.append(idx)
-            continue
-        Q = V[idx]
-        ax = np.argmax(Q.max(0) - Q.min(0))
-        side = np.full(n, -1)
-        side[idx] = (Q[:, ax] > np.median(Q[:, ax])).astype(int)
-        sub = A[idx]
-        r = np.repeat(idx, np.diff(sub.indptr))
-        sep = np.unique(r[(side[r] == 0) & (side[sub.indices] == 1)])
-        side[sep] = 2
-        lo, hi = idx[side[idx] == 0], idx[side[idx] == 1]
-        if not len(lo) or not len(hi):
-            order.append(idx)
-            continue
-        stack += [(sep, 1), (hi, 0), (lo, 0)]                       # popped: lo, hi, then sep
-    pv = np.concatenate(order)
+def _metis_columns(E, n):
+    """A fill-reducing column order of the chord Jacobian: METIS nested dissection
+    (``pymetis``) of the vertex graph, each vertex's three columns (two tangent,
+    ``u``) kept together; ``None`` without ``pymetis`` (the caller then lets SuperLU
+    order by COLAMD). Measured, two LUs per encode (the order's own cost ~0.1 s):
+
+    ===============================  ===========  ===========  =============
+    mesh                             COLAMD       geometric ND METIS ND
+    ===============================  ===========  ===========  =============
+    raw FaceScape scans (26k verts)  0.41–0.45 s  1.39–1.61 s  0.56–0.59 s
+    icosphere-6 heads (41k)          3.70–3.74 s  1.79–1.82 s  1.65–1.68 s
+    ellipsoid ico5 (10k)             0.38 s       0.36 s       0.36 s
+    ===============================  ===========  ===========  =============
+
+    COLAMD loses 2.2× on the regular icosphere grid and a geometric dissection 3.6×
+    on scans (a median plane cuts through the dense face: a 423-vertex top separator
+    where a spectral cut finds 238); METIS is within 1.4× of the best everywhere.
+    (The patch-quotient dissection of Zarebavami, Mahmoud et al. 2026 approximates
+    METIS for million-vertex meshes; at these sizes METIS itself takes ~0.1 s, and a
+    pure-SciPy patch version found 365-vertex separators.)"""
+    try:
+        import pymetis
+    except ImportError:
+        return None
+    E = np.asarray(E)
+    a, b = np.r_[E[:, 0], E[:, 1]], np.r_[E[:, 1], E[:, 0]]
+    o = np.argsort(a, kind="stable")
+    xadj = np.r_[0, np.cumsum(np.bincount(a, minlength=n))]
+    perm, _ = pymetis.nested_dissection(pymetis.CSRAdjacency(adj_starts=xadj, adjacent=b[o]))
+    pv = np.asarray(perm)
     return np.stack([pv, n + pv, 2 * n + pv], 1).ravel()
 
 
@@ -380,9 +381,11 @@ def chord_map(V, F, log=None):
             log(f"   rows rms {np.sqrt(np.mean(r1 ** 2)):.2e} max {np.abs(r1).max():.1e} (step {s:g})")
         return X1, u1
 
-    cols = _dissection_columns(es.V, es.E, es.n)
+    cols = _metis_columns(es.E, es.n)
 
     def factor(X):
+        if cols is None:
+            return spla.splu(_jacobian(es, X).tocsc(), permc_spec="COLAMD")
         return _ColumnLU(spla.splu(_jacobian(es, X)[:, cols].tocsc(), permc_spec="NATURAL"), cols)
 
     # Two chord steps (each by its own LU), one corrected step by GMRES on the second LU (the
