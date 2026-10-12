@@ -48,7 +48,12 @@ well as the exact one.
    cube), the exact Newton–Krylov solve runs from the uniformization
    (:meth:`~shapegen.geom.edge_periods.EdgeSystem.solve`, ≲ 1 s there). The far share moves a 41k-vertex head's map by 1.7e-5 (the
    exact correction would move it 1.3e-5, at 3–6 s), a 2562-vertex bottle's by
-   8e-5: both skip it.
+   8e-5: both skip it. It must also exceed ``FAR_OVER_ROWS`` × the rows' rms: a
+   raw FaceScape scan's far share moves its map by 1.5e-4, but rows its crumpled
+   clusters cannot meet leave an rms of 2e-2 (ratio 0.007; every polyhedron
+   above 0.8). There the rounds never settle (5 rounds, ~100 s, u spread 0.7)
+   and the Newton fallback is the ~20 min solve; skipped, the scan encodes in ~5 s
+   and decodes as before (L=32 vertex error 0.069).
 3. **Spinor.** On each face the map from the sphere to the 3D triangle is the
    Möbius transformation through its three corners (:class:`MobiusFaces`):
    discretely conformal triangles are related by exactly that, and neighbouring
@@ -110,6 +115,7 @@ SEP = 1.0       # panels: every near cone but the end's own ≥ SEP panel length
 GMRES_TOL, GMRES_MAX = 1e-3, 20
 FAR_BAND = 16           # the far cones' smooth field: band (and heat taper) of its expansion
 FAR_EXACT = 1e-4        # exact periods once the far share moves the map more than this (median, rad)
+FAR_OVER_ROWS = 0.1     # ... and by more than this times the rows' rms (else rows it cannot meet bury it)
 
 
 # ------------------------------------------------------------------ local periods
@@ -397,7 +403,9 @@ def chord_map(V, F, log=None):
     # error moves it 0.1–0.75× as much (measured), so only then are exact periods worth it
     y = lu2.solve(np.r_[far, np.zeros(6)])
     far_move = float(np.median(np.hypot(y[:es.n], y[es.n:2 * es.n])))
-    exact = far_move > FAR_EXACT
+    r = resid(X, u)
+    rows_rms = float(np.sqrt(np.mean(r ** 2)))
+    exact = far_move > max(FAR_EXACT, FAR_OVER_ROWS * rows_rms)
     if exact:
         t = time.perf_counter()
 
@@ -448,7 +456,7 @@ def chord_map(V, F, log=None):
         T["exact"] = time.perf_counter() - t
     r = resid(X, u)
     return X, dict(times=T, rms=float(np.sqrt(np.mean(r ** 2))), max=float(np.abs(r).max()),
-                   far_move=far_move, exact_periods=exact)
+                   far_move=far_move, rows_rms=rows_rms, exact_periods=exact)
 
 
 # ------------------------------------------------------------------ the spinor

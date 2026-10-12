@@ -115,7 +115,10 @@ def encode(mesh, L: int, sphere=None, method: str = "polyhedral", refine="auto")
       spinor with curved-edge corrections. On coarse meshes it is within −5 … +2 %
       of the exact encoder it replaced (removed 2026-10-11; L=16: cube, demo
       bottle and ellipsoid at 162–2562 vertices; a spiky 9-vertex hull +13 %) in
-      0.3–2 s. A smoothed 40962-vertex icosphere-6 head encodes in 7–8 s.
+      0.3–2 s. Raw 26k-vertex FaceScape scans (capped, unsmoothed; 3 heads) encode
+      in 6.4–6.8 s (L=16) / 7.6–8.1 s (L=32) at vertex error 0.075–0.084 / 0.059–0.069,
+      within ±1.3 % of the two-path encoder before it (3.2–4.3 s); a smoothed
+      40962-vertex icosphere-6 head in 7–8 s.
       Codes use a cone-centroid Möbius gauge and a rotation fixed by the cones, so
       they are not interchangeable with the other methods'.
       ``res.meta["err_surface"]`` scores the decode over the whole surface.
